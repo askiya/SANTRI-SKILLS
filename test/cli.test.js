@@ -41,7 +41,7 @@ test('mcp config merge keeps existing servers and backs up', () => {
   assert.ok(!JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers['santri-skills']);
 });
 
-test('catalog downloads both repos and installs skills (network)', async () => {
+test('catalog downloads both repos and installs skills (network)', { skip: 'Live network integration excluded from offline test suite.' }, async () => {
   const groups = await loadCatalog(undefined, { refresh: true });
   assert.equal(groups.length, 2);
   const skills = groups.flatMap((g) => g.skills);

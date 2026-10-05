@@ -78,6 +78,7 @@ function initAntigravity(canvas) {
 
   function onPointerMove(e) {
     const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
     // Normalized -1..1 like R3F pointer
     const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const ny = -( ((e.clientY - rect.top) / rect.height) * 2 - 1 );
@@ -85,7 +86,7 @@ function initAntigravity(canvas) {
     if (dist > 0.001) { lastMoveTime = Date.now(); lastPX = nx; lastPY = ny; }
     pointerX = nx; pointerY = ny;
   }
-  window.addEventListener('pointermove', onPointerMove);
+  canvas.parentElement.addEventListener('pointermove', onPointerMove);
 
   // Animation state
   let raf = 0, running = false, startTime = 0, frameCount = 0;
@@ -215,14 +216,14 @@ function initAntigravity(canvas) {
 
   let ro;
   if (typeof ResizeObserver !== 'undefined') {
-    ro = new ResizeObserver(() => { if (running) resize(); });
+    ro = new ResizeObserver(() => { if (running) { resize(); initParticles(); } });
     ro.observe(canvas);
   }
 
   return {
     start() { canvas.dataset.active = '1'; if (mq.matches) drawStatic(); else start(); },
     stop() { canvas.dataset.active = '0'; stop(); },
-    destroy() { stop(); window.removeEventListener('pointermove', onPointerMove); if (ro) ro.disconnect(); },
+    destroy() { stop(); canvas.parentElement.removeEventListener('pointermove', onPointerMove); if (ro) ro.disconnect(); },
     get frameCount() { return frameCount; },
   };
 }

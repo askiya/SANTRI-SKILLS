@@ -234,4 +234,9 @@ function resolveForWrite(scope, opts = {}) {
   return r;
 }
 
-module.exports = { detectTargets, validateCustomTargets, resolveTargets, resolveForWrite };
+function findAntigravityExecutable({home=os.homedir(),env=process.env,platform=process.platform}={}) {
+  const candidates=appEvidence(home,env,platform).map(d=>path.join(d,platform==='win32'?'Antigravity.exe':platform==='darwin'?'Contents/MacOS/Antigravity':'antigravity'));
+  return candidates.find(f=>{try{return fs.statSync(f).isFile()}catch{return false}})||null;
+}
+module.exports = { detectTargets, validateCustomTargets, resolveTargets, resolveForWrite, findAntigravityExecutable };
+if(require.main===module)process.stdout.write(JSON.stringify({executable:findAntigravityExecutable()}));
