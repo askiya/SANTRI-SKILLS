@@ -175,12 +175,48 @@ test('status renderer distinguishes missing, invalid and configured MCP with cat
  assert.match(nodes['#status-view'].innerHTML,/runtime belum diverifikasi/);
  assert.match(nodes['#install-counts'].innerHTML,/1 dikonfigurasi · 0 belum/);
 });
-test('status page shows unified install check and manual reload guide only',()=>{
+test('status page shows unified install check and separate open/restart actions',()=>{
  const html=fs.readFileSync(path.join(__dirname,'../src/dashboard.html'),'utf8'),css=fs.readFileSync(path.join(__dirname,'../src/dashboard.css'),'utf8');
- for(const id of ['status-view','install-counts','target-panel','custom-skills','custom-mcp','validate-custom','refresh-status']) assert.match(html,new RegExp(`id="${id}"`));
+ for(const id of ['status-view','install-counts','target-panel','custom-skills','custom-mcp','validate-custom','refresh-status','open-antigravity','restart-antigravity']) assert.match(html,new RegExp(`id="${id}"`));
+ assert.match(html,/id="open-antigravity"[^>]*>Buka Antigravity</);
+ assert.match(html,/id="restart-antigravity"[^>]*>Restart Antigravity</);
+ assert.match(html,/Pekerjaan belum disimpan dapat hilang/);
  assert.match(html,/Developer: Reload Window/);assert.match(html,/Manage MCP Servers/);assert.match(html,/~\/\.gemini\/antigravity\/mcp_config\.json/);
  assert.doesNotMatch(html,/id="reload-antigravity"/);assert.doesNotMatch(css,/1180px|1036px/);
 });
+
+test('open action launches without close confirm; close/restart demand confirm',()=>{
+ const calls=[];
+ return fixture(async({post,login,cwd})=>{
+  const binary=path.join(cwd,'.antigravity',process.platform==='win32'?'Antigravity.exe':process.platform==='darwin'?'Contents/MacOS/Antigravity':'antigravity');
+  fs.mkdirSync(path.join(cwd,'.antigravity'),{recursive:true});
+  // First candidate wins on macOS; tests only compare injected mock calls.
+  fs.mkdirSync(path.dirname(binary),{recursive:true});fs.writeFileSync(binary,'fixture');
+  const _csrf=(await (await post('/api/auth/callback',{state:await login(),ticket:'ticket_abc'})).json()).csrf;
+  for(const action of ['close','restart'])assert.equal((await post('/api/antigravity/control',{_csrf,action})).status,400);
+  assert.deepEqual(calls,[]);
+  assert.equal((await post('/api/antigravity/control',{_csrf,action:'status'})).status,200);
+  assert.deepEqual(calls.map(c=>c[0]),['status']);
+  const launch=await post('/api/antigravity/control',{_csrf,action:'launch'});
+  assert.equal(launch.status,200,JSON.stringify(await launch.json()));
+  assert.deepEqual(calls.map(c=>c[0]),['status','launch']);
+  assert.equal(calls[1][1].executable,binary);
+  assert.ok(!calls.some(c=>c[0]==='close'),'open must never close the app');
+  assert.equal((await post('/api/antigravity/control',{_csrf,action:'bogus'})).status,400);
+ }, {controlRunner:async(action,options)=>{calls.push([action,options]);return {ok:true,action};}});
+});
+
+test('GitHub install requires exact source and hash before writes',()=>fixture(async({post,login,cwd})=>{
+ const _csrf=(await (await post('/api/auth/callback',{state:await login(),ticket:'ticket_abc'})).json()).csrf;
+ const preview=async()=> (await (await post('/api/github/preview',{_csrf,scope:'project',url:'https://github.com/fixture/repo/tree/main'})).json());
+ for(const field of ['sourceUrl','previewHash'])for(const value of [undefined,null,42,'wrong']){
+  const p=await preview();const body={_csrf,scope:'project',previewId:p.previewId,sourceUrl:p.sourceUrl,previewHash:p.previewHash,confirm:true,skillIds:['repo'],[field]:value};
+  assert.equal((await post('/api/github/install',body)).status,409);
+  assert.deepEqual(fs.readdirSync(cwd),[]);
+ }
+ const p=await preview();assert.equal((await post('/api/github/install',{_csrf,scope:'project',previewId:p.previewId,sourceUrl:p.sourceUrl,previewHash:p.previewHash,confirm:true,skillIds:['repo']})).status,200);
+ assert.equal(fs.readFileSync(path.join(cwd,'.agents','skills','repo','SKILL.md'),'utf8'),'safe');
+},{githubFetch:async url=>String(url).includes('/git/trees/')?new Response(JSON.stringify({tree:[{path:'SKILL.md',type:'blob'}]}),{headers:{'content-type':'application/json'}}):new Response('safe')}));
 
 test('local scanner bounds skills, rejects links, and exposes safe MCP names only',()=>{
  const {scanLocalSkills,scanLocalMcp}=require('../src/local-import');

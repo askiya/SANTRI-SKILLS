@@ -51,6 +51,10 @@ test('GitHub oversized tree, unsafe tree path, duplicate skills and malformed MC
   for(const tree of [{truncated:true,tree:[]},{tree:Array.from({length:2001},(_,i)=>({path:String(i)}))},{tree:[{path:'../bad'}]}])await assert.rejects(previewGithub('https://github.com/fixture/repo/tree/main',{fetcher:async()=>json(tree)}));
   for(const files of [{'a/demo/SKILL.md':'a','b/demo/SKILL.md':'b'},{'mcp_config.json':'{"mcpServers":[]}'}])await assert.rejects(previewGithub('https://github.com/fixture/repo',{fetcher:fixture(files).fetcher}));
 });
+test('GitHub README fetch errors, including size caps, fail preview closed',async()=>{
+  const files={'SKILL.md':'safe','README.md':'x'.repeat(513*1024)};
+  await assert.rejects(previewGithub('https://github.com/fixture/repo',{fetcher:fixture(files).fetcher}),/terlalu besar/);
+});
 test('GitHub snapshot binds source, scope, targets and artifact bytes',async()=>{
   const snap=async(source,scope,targets,text)=>previewGithub(source,{scope,targets,fetcher:fixture({'SKILL.md':text}).fetcher});
   const base=await snap('https://github.com/fixture/repo','project',{mcpFile:'a'},'one');
@@ -65,6 +69,14 @@ test('controller wrapper uses injected execFile and fixed argv, never real proce
   assert.equal(calls[0].options.shell,undefined);
   assert.equal(calls[0].options.timeout,15000);
   await assert.rejects(runControl('status',{}, {pythonCommand:()=>null,execFile:()=>assert.fail('must not execute')}),/tidak ditemukan/);
+});
+test('controller rejects malformed async output and controller failures',async()=>{
+  for(const output of ['not JSON','null','[]','{}','{"ok":false,"error":"fixture failure"}']){
+    let callback; const pending=runControl('status',{}, {pythonCommand:()=>'/fixture/python',execFile:(f,a,o,cb)=>{callback=cb}});
+    const rejected=assert.rejects(pending);
+    assert.doesNotThrow(()=>callback(null,output,''));
+    await rejected;
+  }
 });
 test('dashboard static DOM IDs are unique and literal ID selectors exist',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../src/dashboard.html'),'utf8');
