@@ -1,0 +1,20 @@
+{
+  "sources": [
+    {
+      "id": "appscript",
+      "label": "Google Apps Script Skills",
+      "repo": "askiya/GOOGLE-APPSCRIPT-SKILLS",
+      "branch": "main",
+      "skillsDir": "skills",
+      "docsDirs": ["docs", "examples", "templates"]
+    },
+    {
+      "id": "monorepo",
+      "label": "Pedoman Monorepo Skills",
+      "repo": "askiya/MONOREPO-SKILLS",
+      "branch": "main",
+      "skillsDir": "skills",
+      "docsDirs": ["docs", "checklists", "prompts", "templates", "kelas", "paket"]
+    }
+  ]
+}
