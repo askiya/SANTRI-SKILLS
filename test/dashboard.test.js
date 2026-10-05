@@ -26,7 +26,7 @@ async function fixture(fn) {
 }
 test('signed-out dashboard gates every data and write endpoint, no files',()=>fixture(async({base,post,cwd})=>{
  assert.equal((await fetch(base+'/')).status,200);
- for(const route of ['/api/catalog','/api/auth/status']) assert.equal((await fetch(base+route)).status,401);
+ for(const route of ['/api/catalog','/api/auth/status','/api/status?scope=project']) assert.equal((await fetch(base+route)).status,401);
  for(const route of ['/api/install','/api/mcp','/api/repo/preview','/api/repo/install']) assert.equal((await post(route)).status,401);
  assert.deepEqual(fs.readdirSync(cwd),[]);
 }));
@@ -45,4 +45,15 @@ test('remote denial or outage fails closed before writes',()=>fixture(async({pos
 test('auth writes require same-origin JSON; host protected',()=>fixture(async({base})=>{
  for(const route of ['/api/auth/login','/api/auth/logout','/api/auth/callback']) assert.equal((await fetch(base+route,{method:'POST',headers:{origin:'https://other.example','content-type':'application/json'},body:'{}'})).status,403);
  assert.equal(await new Promise(resolve => { const r=http.get(base+'/',{headers:{host:'evil.example'}},res=>{res.resume();resolve(res.statusCode);}); r.on('error',()=>resolve(0)); }),403);
+}));
+
+test('premium status read validates scope and discloses no commands',()=>fixture(async({base,post,login,cwd,setMode})=>{
+ await post('/api/auth/callback',{state:await login(),ticket:'ticket_abc'});
+ for(const q of ['', '?scope=bad','?scope=project&scope=global','?scope=project&extra=1']) assert.equal((await fetch(base+'/api/status'+q)).status,400);
+ const r=await fetch(base+'/api/status?scope=project');assert.equal(r.status,200);const s=await r.json();assert.equal(s.configured,false);assert.equal(s.runtime,'unverified');assert.deepEqual(fs.readdirSync(cwd),[]);
+ setMode(403);assert.equal((await fetch(base+'/api/status?scope=global')).status,403);
+}));
+test('brand assets explicitly served with correct content types',()=>fixture(async({base})=>{
+ for(const [file,type] of [['santriverse-logo.webp','image/webp'],['antigravity.svg','image/svg+xml']]) { const r=await fetch(base+'/assets/'+file);assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),type); }
+ assert.equal((await fetch(base+'/assets/banner.png')).status,404);
 }));

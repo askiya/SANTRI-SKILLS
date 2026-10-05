@@ -9,6 +9,7 @@
   "files": [
     "bin",
     "src",
+    "assets",
     "registry.json",
     "README.md",
     "LICENSE"
@@ -17,7 +18,7 @@
     "node": ">=18.17"
   },
   "scripts": {
-    "test": "node --test test/cli.test.js test/dashboard.test.js test/registry.test.js test/repo.test.js"
+    "test": "node --test test/cli.test.js test/dashboard.test.js test/install.test.js test/registry.test.js test/repo.test.js"
   },
   "keywords": [
     "antigravity",

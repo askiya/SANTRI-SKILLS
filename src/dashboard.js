@@ -7,13 +7,15 @@ const { createSession, AuthError } = require('./auth');
 const { fetchSource, listSkills } = require('./sources');
 async function remoteSkills(reg) { const skills=[]; for(const source of reg.sources) { const root=await fetchSource(source); skills.push(...listSkills(source,root)); } return skills; }
 const { mcpCatalog } = require('./registry');
-const { installSkills, skillTargets, mcpConfigPath, addMcpServer } = require('./install');
+const { installSkills, skillTargets, mcpConfigPath, addMcpServer, configStatus } = require('./install');
 const { previewRepo, installFromRepo, parseGithubRepo } = require('./repo');
 
 const STATIC = {
   '/': { file: 'dashboard.html', type: 'text/html; charset=utf-8' },
   '/dashboard.css': { file: 'dashboard.css', type: 'text/css' },
   '/dashboard-ui.js': { file: 'dashboard-ui.js', type: 'text/javascript' },
+  '/assets/santriverse-logo.webp': { file: '../assets/santriverse-logo.webp', type: 'image/webp' },
+  '/assets/antigravity.svg': { file: '../assets/antigravity.svg', type: 'image/svg+xml' },
 };
 
 const MAX_BODY = 16384;
@@ -99,6 +101,15 @@ function createDashboardServer({ cwd = process.cwd(), apiUrl, websiteUrl } = {})
       }
 
       // ── All further endpoints require premium (fail-closed) ──
+      if (req.method === 'GET' && req.url.startsWith('/api/status')) {
+        await session.requirePremium();
+        const requestUrl = new URL(req.url, origin);
+        if (requestUrl.pathname !== '/api/status' || [...requestUrl.searchParams.keys()].some((key) => key !== 'scope')) throw new AuthError(400, 'Parameter status invalid.');
+        const scopes = requestUrl.searchParams.getAll('scope');
+        if (scopes.length !== 1 || !['project', 'global'].includes(scopes[0])) throw new AuthError(400, 'Scope invalid.');
+        return send(200, configStatus(scopes[0], cwd));
+      }
+
       if (req.method === 'GET' && req.url === '/api/catalog') {
         await session.requirePremium();
         const remoteCatalog = await session.catalog();

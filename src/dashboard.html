@@ -1,12 +1,76 @@
 <!doctype html>
 <html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Santri Skills Dashboard</title><link rel="stylesheet" href="/dashboard.css"></head>
-<body><aside><a class="brand" href="/">S<span>Santri Skills<small>LOCAL WORKSPACE</small></span></a><div class="side-label">WORKSPACE</div><p class="nav-active">Skills & integrations</p><div class="aside-bottom">127.0.0.1 · Local only<br><small>Powered by Santriverse</small></div></aside>
-<main><header><span>Workspace / Library</span><span class="badge">LOCAL DASHBOARD</span></header><section class="hero"><p class="eyebrow">BUILD WITH BETTER CONTEXT</p><h1>Your agent. More capable.</h1><p>Skill terkurasi dan integrasi MCP untuk Google Antigravity.<br>Preview dulu. Pilih yang perlu. Install ke workspace.</p></section>
-<section id="locked" class="lock-panel"><div class="lock-icon">S</div><div><span class="badge">PREMIUM ACCESS</span><h2>Hubungkan akun Santriverse</h2><p>Katalog dan instalasi membutuhkan akun premium aktif.<br>Login aman melalui website. Token tetap di proses lokal.</p><button id="login">Login dengan Santriverse ↗</button><p class="note">Sesi tidak disimpan. Restart dashboard = login ulang.</p></div></section>
-<section id="member" class="panel row" hidden><div><strong id="identity"></strong><span class="badge">Premium aktif</span></div><button id="logout" class="secondary">Logout</button></section>
-<div id="content" hidden><section class="panel row"><div><h2>Target instalasi</h2><small id="workspace"></small></div><fieldset><legend>Scope</legend><label><input type="radio" name="scope" value="project" checked> Project</label><label><input type="radio" name="scope" value="global"> Global</label></fieldset></section>
-<nav class="tabs" aria-label="Library"><button id="tab-skills" aria-pressed="true">Skills</button><button id="tab-mcp" aria-pressed="false">MCP servers</button></nav>
-<section id="skills-panel"><div class="row"><label class="search">Cari skill<input id="search" type="search" placeholder="Cari nama atau deskripsi…"></label><button id="install-skills">Install terpilih</button></div><div id="skills" class="list"></div>
-<section class="panel"><span class="eyebrow">BRING YOUR OWN REPOSITORY</span><h2>Tambahkan repo GitHub</h2><p>Hanya HTTPS owner/repo. Tidak ada kode yang dijalankan.</p><div class="repo-form"><label>URL repository<input id="repo-url" type="url" placeholder="https://github.com/owner/repo"></label><label>Branch<input id="repo-branch" value="main"></label><button id="preview-repo">Preview SKILL.md</button></div><div id="repo-results" class="list"></div><button id="install-repo" hidden>Install pilihan dari preview</button><p class="note">MCP dari repo sembarangan tidak didukung. Gunakan katalog MCP terkurasi.</p></section></section>
-<section id="mcp-panel" hidden><p>Daftarkan konfigurasi dari katalog terkurasi. Dashboard tidak menjalankan perintah MCP.</p><div id="mcp" class="list"></div></section></div>
-<div class="activity"><progress id="progress" hidden aria-label="Operasi sedang berjalan"></progress><p id="status" role="status" aria-live="polite">Memeriksa sesi…</p></div><footer>Local by design. Verified by Santriverse.<span>Review remote instructions before installing.</span></footer></main><script src="/dashboard-ui.js"></script></body></html>
+<body>
+<button id="nav-toggle" class="nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Buka navigasi">☰</button>
+<aside id="sidebar">
+  <a class="brand" href="#home"><img src="/assets/santriverse-logo.webp" alt="Santriverse" width="34" height="34"><span>Santri Skills<small>LOCAL WORKSPACE</small></span></a>
+  <div class="side-label">NAVIGASI</div>
+  <nav id="nav" aria-label="Halaman">
+    <button data-page="home" aria-current="page">Home</button>
+    <button data-page="skills">Skills</button>
+    <button data-page="mcp">MCP Servers</button>
+    <button data-page="status">Status Config</button>
+    <button data-page="repos">Repositories</button>
+    <button data-page="activity">Activity</button>
+  </nav>
+  <div class="account" id="account" hidden>
+    <span class="avatar" id="avatar" aria-hidden="true">?</span>
+    <span class="who"><strong id="identity">—</strong><small id="identity-sub">premium</small></span>
+    <button id="logout" class="secondary tiny">Logout</button>
+  </div>
+  <div class="aside-bottom">127.0.0.1 · Local only<br><small>Powered by Santriverse</small></div>
+</aside>
+<main>
+<header><span id="crumb">Workspace / Home</span><span class="badge">LOCAL DASHBOARD</span></header>
+
+<section id="locked" class="lock-panel"><img class="lock-icon" src="/assets/santriverse-logo.webp" alt="" width="48" height="48"><div><span class="badge">PREMIUM ACCESS</span><h2>Hubungkan akun Santriverse</h2><p>Katalog dan instalasi membutuhkan akun premium aktif.<br>Login aman melalui website. Token tetap di proses lokal.</p><button id="login">Login dengan Santriverse ↗</button><p class="note">Sesi tidak disimpan. Restart dashboard = login ulang.</p></div></section>
+
+<div id="content" hidden>
+<section class="panel row scope-bar"><div><h2>Target instalasi</h2><small id="workspace"></small></div><fieldset><legend>Scope</legend><label><input type="radio" name="scope" value="project" checked> Project</label><label><input type="radio" name="scope" value="global"> Global</label></fieldset></section>
+
+<section class="page" id="page-home">
+  <p class="eyebrow">BUILD WITH BETTER CONTEXT</p>
+  <h1>Your agent. More capable.</h1>
+  <p class="lead">Skill terkurasi dan integrasi MCP untuk Google Antigravity. Preview dulu. Pilih yang perlu. Install ke workspace.</p>
+  <div class="collab"><img src="/assets/antigravity.svg" alt="Antigravity" width="40" height="40"><span class="x">×</span><img src="/assets/santriverse-logo.webp" alt="Santri Skills" width="40" height="40"><small>Antigravity × Santri Skills</small></div>
+  <div class="stats"><div class="stat"><strong id="stat-skills">—</strong><small>skill di katalog</small></div><div class="stat"><strong id="stat-mcp">—</strong><small>MCP terkurasi</small></div><div class="stat"><strong id="stat-installed">—</strong><small>terpasang (scope ini)</small></div><div class="stat"><strong id="stat-config">—</strong><small>status konfigurasi</small></div></div>
+</section>
+
+<section class="page" id="page-skills" hidden>
+  <h1 class="page-title">Skills</h1>
+  <div class="row"><label class="search">Cari skill<input id="search" type="search" placeholder="Cari nama atau deskripsi…"></label><button id="install-skills">Install terpilih</button></div>
+  <div id="skills" class="list"></div>
+</section>
+
+<section class="page" id="page-mcp" hidden>
+  <h1 class="page-title">MCP Servers</h1>
+  <p class="muted">Daftarkan konfigurasi dari katalog terkurasi. Dashboard tidak menjalankan perintah MCP.</p>
+  <div id="mcp" class="list"></div>
+</section>
+
+<section class="page" id="page-status" hidden>
+  <h1 class="page-title">Status Config</h1>
+  <div class="row"><p class="muted">Dibaca langsung dari disk. Status hijau hanya saat file nyata ada.</p><button id="refresh-status" class="secondary">Refresh</button></div>
+  <div id="status-view" class="list"></div>
+  <p class="note">Runtime MCP tidak diverifikasi dari sini: dashboard tidak melakukan handshake ke server MCP.</p>
+</section>
+
+<section class="page" id="page-repos" hidden>
+  <h1 class="page-title">Repositories</h1>
+  <section class="panel"><span class="eyebrow">BRING YOUR OWN REPOSITORY</span><h2>Tambahkan repo GitHub</h2><p>Hanya HTTPS owner/repo. Tidak ada kode yang dijalankan.</p>
+  <div class="repo-form"><label>URL repository<input id="repo-url" type="url" placeholder="https://github.com/owner/repo"></label><label>Branch<input id="repo-branch" value="main"></label><button id="preview-repo">Preview SKILL.md</button></div>
+  <div id="repo-results" class="list"></div><button id="install-repo" hidden>Install pilihan dari preview</button>
+  <p class="note">MCP dari repo sembarangan tidak didukung. Gunakan katalog MCP terkurasi.</p></section>
+  <h2 class="sub">Sumber katalog aktif</h2><div id="repo-sources" class="list"></div>
+</section>
+
+<section class="page" id="page-activity" hidden>
+  <h1 class="page-title">Activity</h1>
+  <div class="row"><p class="muted">Log sesi ini saja, disimpan di memori browser. Tutup tab = hilang.</p><button id="clear-activity" class="secondary">Bersihkan</button></div>
+  <ol id="activity-log" class="log"></ol>
+</section>
+</div>
+
+<div class="activity"><progress id="progress" hidden aria-label="Operasi sedang berjalan"></progress><p id="status" role="status" aria-live="polite">Memeriksa sesi…</p></div>
+<footer>Local by design. Verified by Santriverse.<span>Review remote instructions before installing.</span></footer>
+</main><script src="/dashboard-ui.js"></script></body></html>

@@ -98,4 +98,59 @@ function removeMcpServer(file) {
   return true;
 }
 
-module.exports = { MARKER, SERVER_NAME, SERVER_ENTRY, skillTargets, mcpConfigPath, installSkills, uninstallSkills, addMcpServer, removeMcpServer };
+// Read-only inspection. "configured" means valid files on disk only; it never
+// claims an MCP runtime handshake or process connection.
+function installedSkills(targets) {
+  const out = [];
+  for (const target of targets) {
+    if (!fs.existsSync(target)) continue;
+    for (const d of fs.readdirSync(target, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      const dir = path.join(target, d.name);
+      const skillFile = path.join(dir, 'SKILL.md');
+      if (!fs.existsSync(skillFile) || !fs.statSync(skillFile).isFile()) continue;
+      const marker = path.join(dir, MARKER);
+      let managed = false, markerValid = false, source = null, installedAt = null;
+      if (fs.existsSync(marker)) {
+        managed = true;
+        try {
+          const meta = JSON.parse(fs.readFileSync(marker, 'utf8'));
+          markerValid = Boolean(meta && typeof meta === 'object' && !Array.isArray(meta));
+          source = typeof meta.source === 'string' ? meta.source : null;
+          installedAt = typeof meta.installedAt === 'string' && !Number.isNaN(Date.parse(meta.installedAt)) ? meta.installedAt : null;
+        } catch { /* malformed marker stays visible, never makes a missing SKILL.md installed */ }
+      }
+      out.push({ id: d.name, dir, source, installedAt, managed, markerValid });
+    }
+  }
+  return out;
+}
+
+function configStatus(scope, cwd = process.cwd(), home = os.homedir()) {
+  if (!['project', 'global'].includes(scope)) throw new Error('Scope invalid');
+  const targets = skillTargets(scope, cwd, home);
+  const skills = installedSkills(targets);
+  const configFile = mcpConfigPath(scope, cwd, home);
+  let servers = [], configValid = true;
+  if (fs.existsSync(configFile)) {
+    try {
+      const cfg = readJson(configFile);
+      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error('Invalid config object');
+      if (cfg.mcpServers != null && (typeof cfg.mcpServers !== 'object' || Array.isArray(cfg.mcpServers))) configValid = false;
+      else servers = Object.entries(cfg.mcpServers || {}).flatMap(([name, entry]) => {
+        const configured = Boolean(entry && typeof entry === 'object' && typeof entry.command === 'string' && entry.command.trim() && (entry.args == null || (Array.isArray(entry.args) && entry.args.every((arg) => typeof arg === 'string'))));
+        return configured ? [{ name, configured: true, managed: name === SERVER_NAME && isOurs(entry), runtime: 'unverified' }] : [];
+      });
+    } catch { configValid = false; }
+  }
+  return {
+    scope,
+    skillTargets: targets.map((dir) => ({ dir, exists: fs.existsSync(dir) })),
+    skills,
+    mcp: { configFile, exists: fs.existsSync(configFile), valid: configValid, servers, runtime: 'unverified' },
+    configured: skills.length > 0 || servers.length > 0,
+    runtime: 'unverified',
+  };
+}
+
+module.exports = { MARKER, SERVER_NAME, SERVER_ENTRY, skillTargets, mcpConfigPath, installSkills, uninstallSkills, addMcpServer, removeMcpServer, installedSkills, configStatus };
