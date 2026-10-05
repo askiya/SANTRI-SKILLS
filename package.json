@@ -31,7 +31,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/askiya/SANTRI-SKILLS-CLI.git"
+    "url": "git+https://github.com/askiya/SANTRI-SKILLS.git"
   },
-  "homepage": "https://github.com/askiya/SANTRI-SKILLS-CLI#readme"
+  "homepage": "https://github.com/askiya/SANTRI-SKILLS#readme"
 }
