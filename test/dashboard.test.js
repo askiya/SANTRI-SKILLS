@@ -57,3 +57,10 @@ test('brand assets explicitly served with correct content types',()=>fixture(asy
  for(const [file,type] of [['santriverse-logo.webp','image/webp'],['antigravity.svg','image/svg+xml']]) { const r=await fetch(base+'/assets/'+file);assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),type); }
  assert.equal((await fetch(base+'/assets/banner.png')).status,404);
 }));
+test('SantriHub shell references served logos and CSP allows same-origin images',()=>fixture(async({base})=>{
+ const r=await fetch(base+'/');const html=await r.text();const csp=r.headers.get('content-security-policy');
+ assert.match(html,/<title>SantriHub<\/title>/);assert.match(html,/class="workspace-name">SantriHub</);
+ for(const src of new Set([...html.matchAll(/<img[^>]+src="([^"]+)"/g)].map(m=>m[1]))) { assert.match(src,/^\/assets\//); const a=await fetch(base+src); assert.equal(a.status,200,src); assert.match(a.headers.get('content-type'),/^image\//); }
+ assert.ok(html.includes('/assets/santriverse-logo.webp')&&html.includes('/assets/antigravity.svg'));
+ assert.match(csp,/default-src 'self'/);assert.doesNotMatch(csp,/img-src(?![^;]*'self')/);
+}));

@@ -12,6 +12,7 @@
     "assets",
     "registry.json",
     "README.md",
+    "DESIGN-PARITY.md",
     "LICENSE"
   ],
   "engines": {
