@@ -68,11 +68,21 @@ function readJson(file) {
   }
 }
 
-// Merge our server into mcp_config.json, keep everything else, back up the original once per run.
-function addMcpServer(file, entry = SERVER_ENTRY) {
+// Merge one server into mcp_config.json, keep everything else, back up the original once per run.
+// Unknown entries under the same name are never replaced: collisions are rejected.
+// santri-skills may be refreshed only when the existing entry is recognisably ours (npx package or local cli.js mcp-serve).
+const { isDeepStrictEqual } = require('node:util');
+const localEntry = { command: process.execPath, args: [path.resolve(__dirname, '../bin/cli.js'), 'mcp-serve'] };
+const isOurs = (e) => isDeepStrictEqual(e, SERVER_ENTRY) || isDeepStrictEqual(e, localEntry);
+function addMcpServer(file, entry = SERVER_ENTRY, name = SERVER_NAME) {
   const config = readJson(file);
+  const existing = config.mcpServers && config.mcpServers[name];
+  const same = JSON.stringify(existing) === JSON.stringify(entry);
+  if (existing && !same && !(name === SERVER_NAME && isOurs(existing))) {
+    throw new Error(`MCP '${name}' sudah ada di ${file} dengan konfigurasi lain. Hapus manual dulu, file tidak diubah.`);
+  }
   if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
-  config.mcpServers = { ...(config.mcpServers || {}), [SERVER_NAME]: entry };
+  config.mcpServers = { ...(config.mcpServers || {}), [name]: entry };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n');
   return config;

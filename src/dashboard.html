@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Santri Skills Dashboard</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <p>SANTRI SKILLS</p>
+      <h1>Skills Dashboard</h1>
+      <span id="workspace">Memuat workspace…</span>
+    </header>
+
+    <section class="panel" aria-labelledby="scope-title">
+      <h2 id="scope-title">Target Antigravity</h2>
+      <label><input type="radio" name="scope" value="project" checked> Project</label>
+      <label><input type="radio" name="scope" value="global"> Global</label>
+    </section>
+
+    <section class="panel" aria-labelledby="skills-title">
+      <div class="row">
+        <h2 id="skills-title">Agent Skills</h2>
+        <button id="install-skills" type="button" disabled>Install terpilih</button>
+      </div>
+      <label class="search">Cari skill <input id="search" type="search" placeholder="apps-script, deploy, security"></label>
+      <div id="skills" class="list" aria-live="polite">Memuat katalog…</div>
+    </section>
+
+    <section class="panel" aria-labelledby="mcp-title">
+      <h2 id="mcp-title">MCP Server</h2>
+      <div id="mcp" class="list"></div>
+    </section>
+
+    <p id="status" role="status" aria-live="polite"></p>
+  </main>
+  <script src="/dashboard-ui.js"></script>
+</body>
+</html>

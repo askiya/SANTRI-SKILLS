@@ -16,5 +16,6 @@
       "skillsDir": "skills",
       "docsDirs": ["docs", "checklists", "prompts", "templates", "kelas", "paket"]
     }
-  ]
+  ],
+  "mcpServers": []
 }

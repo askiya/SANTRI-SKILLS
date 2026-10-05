@@ -36,6 +36,7 @@ Penggunaan:
   npx santriverse-skills mcp-install   Daftarkan MCP server ke Antigravity
   npx santriverse-skills mcp-serve     Jalankan MCP stdio server
   npx santriverse-skills uninstall     Hapus instalasi milik Santri Skills
+  npx santriverse-skills dashboard     Buka dashboard localhost (pilih skill/MCP via browser)
 
 Opsi:
   --scope=project|global               Target instalasi (default: tanya)
@@ -122,6 +123,16 @@ async function main() {
   if (command === 'update') return runInstall(flags, true);
   if (command === 'mcp-install') return runMcpInstall(flags);
   if (command === 'uninstall') return runUninstall(flags);
+  if (command === 'dashboard') {
+    const { createDashboardServer } = require('../src/dashboard');
+    const server = createDashboardServer({ cwd: process.cwd() });
+    const port = Number(flags.port) || 4173;
+    server.listen(port, '127.0.0.1', () => {
+      console.log(`  ${c.green('✓')} Dashboard aktif: ${c.bold(`http://127.0.0.1:${port}`)}`);
+      console.log(`  ${c.dim('Tekan Ctrl+C untuk berhenti.')}\n`);
+    });
+    return;
+  }
   throw new Error(`Perintah tidak dikenal: ${command}\n${help()}`);
 }
 
