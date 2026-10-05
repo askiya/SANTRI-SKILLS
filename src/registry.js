@@ -71,6 +71,11 @@ function loadRegistry({ file = process.env.SANTRI_SKILLS_REGISTRY || BUNDLED } =
   } catch {
     throw new Error(`Katalog registry bukan JSON valid: ${file}`);
   }
+  return validateRegistry(raw);
+}
+
+function validateRegistry(raw) {
+  const file = 'remote catalog';
   const mcpRaw = raw && raw.mcpServers === undefined ? [] : raw && raw.mcpServers;
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.sources) || !Array.isArray(mcpRaw)) {
     throw new Error(`Schema registry invalid (butuh sources[] dan mcpServers[]): ${file}`);
@@ -84,4 +89,4 @@ function loadRegistry({ file = process.env.SANTRI_SKILLS_REGISTRY || BUNDLED } =
   return { sources, mcpServers };
 }
 
-module.exports = { loadRegistry, validateSource, validateMcpEntry, mcpCatalog, BUILTIN_MCP, BUNDLED, valid };
+module.exports = { validateRegistry, loadRegistry, validateSource, validateMcpEntry, mcpCatalog, BUILTIN_MCP, BUNDLED, valid };

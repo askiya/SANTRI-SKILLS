@@ -144,46 +144,52 @@ test('addMcpServer supports a custom name and refuses to clobber a foreign entry
   assert.equal(merged.mcpServers.cms.command, 'other', 'entri asing tetap utuh');
 });
 
-test('dashboard catalog exposes registry mcp entries and installs them by id', async () => {
-  const file = writeRegistry('dash', {
-    sources: [],
-    mcpServers: [{ id: 'cms', label: 'CMS', description: 'Vetted', command: 'npx', args: ['-y', 'santriverse-cms-mcp'] }],
+test('dashboard catalog exposes registry mcp entries and installs them by id (authenticated)', async () => {
+  const mcpEntry = { id: 'cms', label: 'CMS', description: 'Vetted', command: 'npx', args: ['-y', 'santriverse-cms-mcp'] };
+  const http = require('node:http');
+  // Mock remote: premium session + the catalog this dashboard must gate on.
+  const remote = http.createServer(async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'POST') { for await (const _ of req) { /* drain */ } }
+    res.end(JSON.stringify(req.url.endsWith('catalog')
+      ? { success: true, sources: [], mcpServers: [mcpEntry] }
+      : { success: true, token: 'session-token', user: { name: 'Member', is_premium: true } }));
   });
-  process.env.SANTRI_SKILLS_REGISTRY = file;
+  await new Promise((r) => remote.listen(0, '127.0.0.1', r));
+
   const { createDashboardServer } = require('../src/dashboard');
   const cwd = path.join(tmp, 'ws');
-  const server = createDashboardServer({ cwd });
+  const server = createDashboardServer({ cwd, apiUrl: `http://127.0.0.1:${remote.address().port}/api` });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (url, body) => fetch(base + url, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify(body) });
+
   try {
+    // Unauthenticated: catalog and MCP registration are both closed.
+    assert.equal((await fetch(base + '/api/catalog')).status, 401);
+    assert.equal((await post('/api/mcp', { scope: 'project', id: 'cms', confirm: true })).status, 401);
+    assert.ok(!fs.existsSync(path.join(cwd, '.agents', 'mcp_config.json')), 'tidak ada file ditulis tanpa login');
+
+    const state = new URL((await (await post('/api/auth/login', {})).json()).url).searchParams.get('state');
+    const { csrf } = await (await post('/api/auth/callback', { state, ticket: 'ticket_abc' })).json();
+
     const catalog = await (await fetch(base + '/api/catalog')).json();
     assert.deepEqual(catalog.mcpServers.map((m) => m.id), ['santri-skills', 'cms']);
-    assert.ok(!JSON.stringify(catalog).includes('npx'), 'command tidak dibocorkan ke browser');
+    assert.ok(!JSON.stringify(catalog.mcpServers).includes('npx'), 'command tidak dibocorkan ke browser');
 
-    const res = await fetch(base + '/api/mcp', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', origin: base },
-      body: JSON.stringify({ scope: 'project', id: 'cms', confirm: true }),
-    });
-    assert.equal(res.status, 200);
+    assert.equal((await post('/api/mcp', { scope: 'project', id: 'cms', confirm: true, _csrf: csrf })).status, 200);
     const cfg = JSON.parse(fs.readFileSync(path.join(cwd, '.agents', 'mcp_config.json'), 'utf8'));
     assert.deepEqual(cfg.mcpServers.cms, { command: 'npx', args: ['-y', 'santriverse-cms-mcp'] });
 
-    const missing = await fetch(base + '/api/mcp', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', origin: base },
-      body: JSON.stringify({ scope: 'project', id: 'unknown', confirm: true }),
-    });
-    assert.equal(missing.status, 400);
-
-    const unconfirmed = await fetch(base + '/api/mcp', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', origin: base },
-      body: JSON.stringify({ scope: 'project', id: 'cms' }),
-    });
-    assert.equal(unconfirmed.status, 400);
+    assert.equal((await post('/api/mcp', { scope: 'project', id: 'unknown', confirm: true, _csrf: csrf })).status, 400);
+    assert.equal((await post('/api/mcp', { scope: 'project', id: 'cms', _csrf: csrf })).status, 400);
+    // A write without the per-page CSRF token is refused even while signed in.
+    assert.equal((await post('/api/mcp', { scope: 'project', id: 'cms', confirm: true })).status, 403);
+    // Global scope needs an explicit confirmation flag.
+    assert.equal((await post('/api/mcp', { scope: 'global', id: 'cms', confirm: true, _csrf: csrf })).status, 400);
   } finally {
-    await new Promise((r) => server.close(r));
-    delete process.env.SANTRI_SKILLS_REGISTRY;
+    server.closeAllConnections();
+    remote.closeAllConnections();
+    await Promise.all([new Promise((r) => server.close(r)), new Promise((r) => remote.close(r))]);
   }
 });

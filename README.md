@@ -59,26 +59,58 @@ npm install --global santriverse-skills
 santriverse-skills install
 ```
 
-## Dashboard lokal
+## Dashboard premium lokal
 
-Dashboard menyediakan pemilihan skill dan MCP lewat browser:
+Dashboard menyediakan katalog premium, preview repo GitHub, instalasi skill, dan katalog MCP lewat browser:
 
 ```bash
 node bin/cli.js dashboard
 # Setelah rilis npm: npx santriverse-skills dashboard
 ```
 
-Buka `http://127.0.0.1:4173`. Port dapat diganti:
+Buka `http://127.0.0.1:4173`. Port dapat diganti (gunakan ini bila 4173 sedang dipakai):
 
 ```bash
 node bin/cli.js dashboard --port=5173
 ```
 
-Dashboard hanya bind ke loopback `127.0.0.1`. Biarkan terminal berjalan selama dashboard dipakai; tekan `Ctrl+C` untuk berhenti.
+Klik **Login dengan Santriverse**. Dashboard membuat `state` acak dan PKCE verifier lokal, membuka halaman `/skills/connect`, lalu menukar ticket sekali pakai melalui API. State/login pending kedaluwarsa setelah 5 menit.
+
+Token sesi hanya hidup di memori proses server lokal: token tidak ditulis ke disk, localStorage, cookie, HTML, respons browser, atau log. Restart dashboard selalu meminta login ulang. Setiap endpoint katalog, preview, install, dan MCP memverifikasi sesi premium ke API pada setiap panggilan; respons 401/403 dan kegagalan jaringan gagal tertutup sebelum penulisan file.
+
+Dashboard hanya bind ke loopback `127.0.0.1`. Jangan proxy atau mengekspos port ini. Biarkan terminal berjalan selama dashboard dipakai; tekan `Ctrl+C` untuk berhenti.
+
+### Endpoint remote
+
+Default production:
+
+```text
+SANTRI_SKILLS_API_URL=https://api.santriverse.my.id/api
+SANTRI_SKILLS_WEBSITE_URL=https://santriverse.my.id
+```
+
+Override untuk development lokal saja:
+
+```bash
+SANTRI_SKILLS_API_URL=http://127.0.0.1:8000/api \
+SANTRI_SKILLS_WEBSITE_URL=http://127.0.0.1:3000 \
+node bin/cli.js dashboard --port=5173
+```
+
+URL wajib HTTPS. HTTP hanya diterima untuk hostname loopback eksplisit (`127.0.0.1`, `::1`, atau `localhost`).
+
+Kontrak backend:
+
+- `POST /skills/session` menukar `{ticket, code_verifier}` menjadi `{success, token, user}`.
+- `GET /skills/session` memverifikasi token dan premium.
+- `DELETE /skills/session` mencabut sesi saat logout.
+- `GET /skills/catalog` mengembalikan `{success, sources, mcpServers}` yang lolos validator registry ketat.
 
 ## Menambah repo skill dan MCP sendiri
 
-Katalog bawaan hanya memuat dua repo Santriverse. Untuk menghubungkan repo lain atau MCP server pilihan Anda, salin `registry.json`, tambahkan entri, lalu jalankan CLI dengan env `SANTRI_SKILLS_REGISTRY`.
+Dashboard menyediakan kolom **Tambahkan repo GitHub**: masukkan URL `https://github.com/owner/repo`, preview semua `SKILL.md`, pilih skill, lalu install. Repo pihak ketiga tidak dapat menambah atau menjalankan MCP.
+
+Untuk perintah CLI publik (`install`, `list`, `mcp-serve`) atau katalog MCP lokal, salin `registry.json`, tambahkan entri, lalu jalankan CLI dengan env `SANTRI_SKILLS_REGISTRY`. Override lokal ini tidak mengganti katalog premium dashboard; dashboard selalu memakai katalog tervalidasi dari API resmi.
 
 ```json
 {
@@ -112,14 +144,21 @@ Dashboard menampilkan seluruh skill dan MCP dari katalog itu, dan tombol install
 
 ## Perintah CLI
 
+Perintah CLI berikut tetap publik dan **tidak memerlukan login** — cukup koneksi internet untuk mengunduh dari sumber yang terdaftar di `registry.json`:
+
 ```bash
 node bin/cli.js install       # Pasang Agent Skills
 node bin/cli.js update        # Ambil ulang sumber dan perbarui instalasi
 node bin/cli.js list          # Tampilkan katalog skill
 node bin/cli.js mcp-install   # Daftarkan MCP server santri-skills
 node bin/cli.js mcp-serve     # Jalankan MCP server melalui stdio
-node bin/cli.js dashboard     # Buka dashboard localhost
 node bin/cli.js uninstall     # Hapus instalasi yang dikelola CLI
+```
+
+Dashboard (memerlukan login premium via Santriverse):
+
+```bash
+node bin/cli.js dashboard     # Buka dashboard localhost
 ```
 
 Semua contoh `node bin/cli.js ...` dapat diganti dengan `santriverse-skills ...` setelah `npm link`, atau `npx santriverse-skills ...` setelah paket tersedia di npm.
@@ -205,7 +244,11 @@ Sebelum langkah 5 selesai, dokumentasi dan pengguna harus tetap memakai clone so
 - `--force` dapat menimpa folder bernama sama. Gunakan hanya setelah memeriksa target dan menyimpan perubahan lokal.
 - Scope `global` memengaruhi semua project pengguna. Pilih scope `project` untuk membatasi dampak.
 - MCP membaca katalog yang di-cache dari sumber terdaftar; ini bukan sandbox dan bukan mekanisme verifikasi tanda tangan konten.
-- Dashboard tidak memakai autentikasi, tetapi hanya listen di `127.0.0.1`. Jangan mem-proxy atau mengekspos port ke jaringan yang tidak tepercaya.
+- Dashboard memerlukan login premium Santriverse dan hanya listen di `127.0.0.1`. Jangan mem-proxy atau mengekspos port ke jaringan yang tidak tepercaya.
+- **Batas lisensi yang jujur:** CLI ini open source. Siapa pun dapat membaca, fork, menghapus pemeriksaan login, atau menjalankan `install`/`update`/`mcp-serve` tanpa akun. Yang benar-benar dilindungi adalah **API resmi Santriverse** (`/skills/session`, `/skills/catalog`): endpoint itu menolak token non-premium di server. Kode sumber publik tidak dapat menegakkan lisensi offline, dan tidak ada klaim sebaliknya di sini.
+- **Repo GitHub pihak ketiga:** hanya URL HTTPS bentuk `https://github.com/owner/repo` diterima. Host lain, SSH, subpath, kredensial dalam URL, dan redirect ditolak. Arsip dibatasi 25 MB terunduh / 80 MB terekstraksi; entri dengan `..`, path absolut, atau symlink/hardlink ditolak. Preview hanya **membaca** `SKILL.md` sebagai teks; tidak ada kode dari repo yang dijalankan, dan instalasi hanya terjadi setelah Anda memilih skill secara eksplisit.
+- **MCP dari repo sembarangan tidak didukung.** MCP server berarti menjalankan perintah di mesin Anda, sehingga hanya katalog MCP terkurasi dari API resmi yang dapat didaftarkan. Dashboard menulis konfigurasi saja dan tidak pernah mengeksekusi perintah MCP.
+- Scope `project` adalah default. Scope `global` memengaruhi semua project Antigravity dan memerlukan konfirmasi eksplisit di UI maupun flag `confirmGlobal` di API lokal.
 - Backup MCP hanya satu file `.bak`; simpan backup terpisah sebelum perubahan penting.
 - CLI tidak meminta API key. Jangan menaruh secret di skill, dokumen, argumen CLI, atau konfigurasi yang masuk version control.
 

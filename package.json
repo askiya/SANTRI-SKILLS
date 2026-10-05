@@ -17,7 +17,7 @@
     "node": ">=18.17"
   },
   "scripts": {
-    "test": "node --test test/cli.test.js test/dashboard.test.js test/registry.test.js"
+    "test": "node --test test/cli.test.js test/dashboard.test.js test/registry.test.js test/repo.test.js"
   },
   "keywords": [
     "antigravity",
