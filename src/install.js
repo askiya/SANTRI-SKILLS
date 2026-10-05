@@ -76,6 +76,10 @@ const localEntry = { command: process.execPath, args: [path.resolve(__dirname, '
 const isOurs = (e) => isDeepStrictEqual(e, SERVER_ENTRY) || isDeepStrictEqual(e, localEntry);
 function addMcpServer(file, entry = SERVER_ENTRY, name = SERVER_NAME) {
   const config = readJson(file);
+  // Shape check BEFORE any backup/write: a non-object root or non-object mcpServers
+  // would otherwise be silently replaced and the user's data lost.
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error(`${file} bukan object JSON (root harus object). File tidak diubah.`);
+  if (Object.hasOwn(config, 'mcpServers') && (!config.mcpServers || typeof config.mcpServers !== 'object' || Array.isArray(config.mcpServers))) throw new Error(`${file}: mcpServers harus object. File tidak diubah.`);
   const existing = config.mcpServers && config.mcpServers[name];
   const same = JSON.stringify(existing) === JSON.stringify(entry);
   if (existing && !same && !(name === SERVER_NAME && isOurs(existing))) {
@@ -126,11 +130,11 @@ function installedSkills(targets) {
   return out;
 }
 
-function configStatus(scope, cwd = process.cwd(), home = os.homedir()) {
+function configStatus(scope, cwd = process.cwd(), home = os.homedir(), override = {}) {
   if (!['project', 'global'].includes(scope)) throw new Error('Scope invalid');
-  const targets = skillTargets(scope, cwd, home);
+  const targets = override.skillTargets || skillTargets(scope, cwd, home);
   const skills = installedSkills(targets);
-  const configFile = mcpConfigPath(scope, cwd, home);
+  const configFile = Object.hasOwn(override, 'mcpFile') ? override.mcpFile : mcpConfigPath(scope, cwd, home);
   let servers = [], configValid = true;
   if (fs.existsSync(configFile)) {
     try {

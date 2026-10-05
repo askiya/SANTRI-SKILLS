@@ -7,23 +7,31 @@ const { createSession, AuthError } = require('./auth');
 const { fetchSource, listSkills } = require('./sources');
 async function remoteSkills(reg) { const skills=[]; for(const source of reg.sources) { const root=await fetchSource(source); skills.push(...listSkills(source,root)); } return skills; }
 const { mcpCatalog } = require('./registry');
-const { installSkills, skillTargets, mcpConfigPath, addMcpServer, configStatus } = require('./install');
+const { installSkills, addMcpServer, configStatus } = require('./install');
 const { previewRepo, installFromRepo, parseGithubRepo } = require('./repo');
+const { detectTargets, validateCustomTargets, resolveTargets, resolveForWrite } = require('./detect');
 
 const STATIC = {
   '/': { file: 'dashboard.html', type: 'text/html; charset=utf-8' },
   '/dashboard.css': { file: 'dashboard.css', type: 'text/css' },
   '/dashboard-ui.js': { file: 'dashboard-ui.js', type: 'text/javascript' },
+  '/antigravity.js': { file: 'antigravity.js', type: 'text/javascript' },
   '/assets/santriverse-logo.webp': { file: '../assets/santriverse-logo.webp', type: 'image/webp' },
+  '/assets/santriverse-logo-light.webp': { file: '../assets/santriverse-logo-light.webp', type: 'image/webp' },
   '/assets/antigravity.svg': { file: '../assets/antigravity.svg', type: 'image/svg+xml' },
 };
 
 const MAX_BODY = 16384;
+// Names only; values (command/env/headers) never leave this helper.
+function configStatusNames(file) { try { const c = JSON.parse(fs.readFileSync(file, 'utf8') || '{}'); return c && c.mcpServers && typeof c.mcpServers === 'object' && !Array.isArray(c.mcpServers) ? c.mcpServers : {}; } catch { return {}; } }
 
-function createDashboardServer({ cwd = process.cwd(), apiUrl, websiteUrl } = {}) {
+function createDashboardServer({ cwd = process.cwd(), home, env = process.env, apiUrl, websiteUrl } = {}) {
   const session = createSession({ apiUrl, websiteUrl });
   const csrfTokens = new Map();
   let busy = false;
+  // In-memory only. Never persisted to disk, cleared when the process exits.
+  let customTargets = { skillsDir: null, mcpFile: null };
+  const targetOptions = () => ({ cwd, home, env, custom: customTargets, repoRoot: path.resolve(__dirname, '..') });
 
   function freshCsrf() {
     const tok = crypto.randomBytes(24).toString('hex');
@@ -101,13 +109,22 @@ function createDashboardServer({ cwd = process.cwd(), apiUrl, websiteUrl } = {})
       }
 
       // ── All further endpoints require premium (fail-closed) ──
+      if (req.method === 'GET' && req.url.startsWith('/api/targets')) {
+        await session.requirePremium();
+        const u = new URL(req.url, origin);
+        const scopes = u.searchParams.getAll('scope');
+        if (u.pathname !== '/api/targets' || [...u.searchParams.keys()].some(k => k !== 'scope') || scopes.length !== 1 || !['project','global'].includes(scopes[0])) throw new AuthError(400, 'Parameter targets invalid.');
+        const detection = detectTargets({ cwd, home, env });
+        return send(200, { ...detection, custom: customTargets, effective: Object.fromEntries(['project','global'].map(s => [s, resolveTargets(s, { ...targetOptions(), detection })])) });
+      }
       if (req.method === 'GET' && req.url.startsWith('/api/status')) {
         await session.requirePremium();
         const requestUrl = new URL(req.url, origin);
         if (requestUrl.pathname !== '/api/status' || [...requestUrl.searchParams.keys()].some((key) => key !== 'scope')) throw new AuthError(400, 'Parameter status invalid.');
         const scopes = requestUrl.searchParams.getAll('scope');
         if (scopes.length !== 1 || !['project', 'global'].includes(scopes[0])) throw new AuthError(400, 'Scope invalid.');
-        return send(200, configStatus(scopes[0], cwd));
+        const target = resolveTargets(scopes[0], targetOptions());
+        return send(200, configStatus(scopes[0], cwd, home, { skillTargets: target.skillsDirs, mcpFile: target.mcpFile }));
       }
 
       if (req.method === 'GET' && req.url === '/api/catalog') {
@@ -129,8 +146,14 @@ function createDashboardServer({ cwd = process.cwd(), apiUrl, websiteUrl } = {})
       if (input.scope === 'global' && input.confirmGlobal !== true) throw new AuthError(400, 'Konfirmasi global wajib.');
 
       // CSRF on write operations
-      if (['/api/install', '/api/mcp', '/api/repo/install'].includes(req.url)) {
+      if (['/api/install', '/api/mcp', '/api/repo/install', '/api/targets/custom'].includes(req.url)) {
         if (!input._csrf || !csrfTokens.has(input._csrf)) return send(403, { error: 'Token CSRF tidak valid. Muat ulang halaman.' });
+      }
+
+      if (req.url === '/api/targets/custom') {
+        const result = validateCustomTargets(input, { cwd: path.resolve(__dirname, '..') });
+        customTargets = { skillsDir: result.skillsDir, mcpFile: result.mcpFile };
+        return send(200, { custom: customTargets, checks: result.checks, persisted: false });
       }
 
       if (req.url === '/api/repo/preview') {
@@ -143,7 +166,7 @@ function createDashboardServer({ cwd = process.cwd(), apiUrl, websiteUrl } = {})
       if (req.url === '/api/repo/install') {
         if (typeof input.url !== 'string') throw new AuthError(400, 'URL repo wajib.');
         if (!['project', 'global'].includes(input.scope)) throw new AuthError(400, 'Scope invalid.');
-        const targets = skillTargets(input.scope, cwd);
+        const targets = () => resolveForWrite(input.scope, { ...targetOptions(), kind: 'skills' }).skillsDirs;
         const result = await installFromRepo(input.url, input.branch, input.skillIds, targets, { force: false });
         return send(200, result);
       }
@@ -157,15 +180,21 @@ function createDashboardServer({ cwd = process.cwd(), apiUrl, websiteUrl } = {})
           if (typeof input.id !== 'string' || input.confirm !== true) throw new Error('Konfirmasi MCP wajib');
           const entry = mcpCatalog(await session.catalog()).find((m) => m.id === input.id);
           if (!entry) throw new Error('MCP tidak terdaftar di katalog');
-          const config = mcpConfigPath(input.scope, cwd);
-          if (entry.builtin) addMcpServer(config, { command: process.execPath, args: [path.resolve(__dirname, '../bin/cli.js'), 'mcp-serve'] });
-          else addMcpServer(config, { command: entry.command, args: entry.args }, entry.id);
-          return send(200, { message: `MCP ${entry.id} terdaftar. Reload Antigravity.`, config });
+          const config = resolveForWrite(input.scope, { ...targetOptions(), kind: 'mcp' }).mcpFile;
+          const before = fs.existsSync(config) ? Object.keys(configStatusNames(config)) : [];
+          const existed = fs.existsSync(config);
+          const name = entry.builtin ? 'santri-skills' : entry.id;
+          const written = entry.builtin
+            ? addMcpServer(config, { command: process.execPath, args: [path.resolve(__dirname, '../bin/cli.js'), 'mcp-serve'] })
+            : addMcpServer(config, { command: entry.command, args: entry.args }, entry.id);
+          const after = Object.keys(written.mcpServers || {});
+          return send(200, { message: `MCP ${name} terdaftar. Reload Antigravity.`, config, backup: existed ? `${config}.bak` : null,
+            added: after.filter((n) => !before.includes(n)), updated: before.includes(name) ? [name] : [], servers: after });
         }
         if (!Array.isArray(input.skillIds) || !input.skillIds.length || input.skillIds.some((id) => typeof id !== 'string')) throw new Error('Pilih skill');
         const skills = await remoteSkills(await session.catalog());
         if (input.skillIds.some((id) => !skills.some((s) => s.id === id))) throw new Error('Skill tidak terdaftar');
-        const result = installSkills(skills.filter((s) => input.skillIds.includes(s.id)), skillTargets(input.scope, cwd));
+        const result = installSkills(skills.filter((s) => input.skillIds.includes(s.id)), resolveForWrite(input.scope, { ...targetOptions(), kind: 'skills' }).skillsDirs);
         send(200, { installed: result.installed.length, skipped: result.skipped.length });
       } finally {
         busy = false;

@@ -60,3 +60,9 @@ Port 5199: PID 29432, command `node bin/cli.js dashboard --port=5199`, mulai 202
 ## Batas parity
 
 Tidak menyalin React/Tailwind, editor, modal share, atau font remote. Nama package/bin dan ID MCP tetap kompatibel; nama UI SantriHub. Halaman premium tidak dibypass. Bukti browser dan gate dicatat setelah verifikasi nyata.
+
+## Scale pass Oktober 2026
+
+Nilai Notes exact yang dipakai: body/editor 16px dan line-height 1.75; judul editor clamp(28px,4vw,42px), Home tetap clamp(36px,4vw,54px); kartu padding 20px/radius 16px; gate padding 40px/radius 18px; nav Notes asli 33px dinaikkan ke 38px untuk keterbacaan dashboard. Sebelum: body 14px, item text 12px, item padding 16px/radius 14px, workspace logo 31px. Sesudah: body 16px, item text 14px, item padding 20px/radius 16px, workspace logo 46px, gate logo 84px.
+
+Target resmi diverifikasi dari https://antigravity.google/docs/skills dan https://antigravity.google/docs/mcp. `~/.gemini/antigravity` hanya bukti runtime (OAuth tokens), bukan target skills/MCP. Override proses: `SANTRI_SKILLS_AG_HOME`, fallback `ANTIGRAVITY_HOME`.

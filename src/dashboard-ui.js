@@ -25,7 +25,7 @@ $$('.logo-box img').forEach(img=>{const mark=()=>img.closest('.logo-box').classL
 // ─ Navigation ─
 function go(page){if(!PAGES[page])page='home';$$('[data-page]').forEach(b=>b.dataset.page===page?b.setAttribute('aria-current','page'):b.removeAttribute('aria-current'));
   Object.keys(PAGES).forEach(p=>show($('#page-'+p),p===page));$('#crumb').textContent='Workspace / '+PAGES[page];
-  if(location.hash!=='#'+page)history.replaceState(null,'','#'+page);closeNav();if(page==='status'&&csrf)loadStatus()}
+  if(location.hash!=='#'+page)history.replaceState(null,'','#'+page);closeNav();syncFx(page);if(page==='status'&&csrf){loadStatus();loadTargets()}}
 $$('[data-page]').forEach(b=>b.onclick=()=>go(b.dataset.page));
 $$('[data-rail-page]').forEach(b=>b.onclick=()=>{document.body.classList.remove('rail');go(b.dataset.railPage)});
 $$('[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));
@@ -62,11 +62,11 @@ function showMember(u){const name=(u&&u.name)||'Member',email=(u&&u.email)||'Pre
   $('#identity').textContent=name;$('#identity-sub').textContent=email;$('#menu-name').textContent=name;$('#menu-email').textContent=email;
   $('#avatar').textContent=initial;$('#menu-avatar').textContent=initial;$('.rail-avatar').textContent=initial;
   typewriter($('#home-greeting'),[`Selamat datang, ${name.split(' ')[0]}.`,`Siap memasang skill, ${name.split(' ')[0]}?`,'Skills + MCP untuk Antigravity.']);
-  show($('#account'));show($('#locked'),false);show($('#content'));status('Premium aktif. Katalog siap.')}
-function showLocked(){csrf='';lastStatus=null;selectedSkills.clear();activity.length=0;repoCache=null;catalog={skills:[],mcpServers:[]};renderActivity();closeProfile();show($('#locked'));show($('#account'),false);show($('#content'),false);status('Login untuk mengakses katalog premium.')}
+  show($('#account'));show($('#locked'),false);show($('#content'));syncFx(location.hash.slice(1)||'home');status('Premium aktif. Katalog siap.')}
+function showLocked(){csrf='';lastStatus=null;selectedSkills.clear();activity.length=0;repoCache=null;catalog={skills:[],mcpServers:[]};renderActivity();closeProfile();show($('#locked'));show($('#account'),false);show($('#content'),false);syncFx('');status('Login untuk mengakses katalog premium.')}
 $('#login').onclick=()=>busy($('#login'),'Membuka login…',async()=>{const{url}=await post('/api/auth/login');location.href=url});
 $('#logout').onclick=()=>busy($('#logout'),'Logout…',async()=>{await post('/api/auth/logout');showLocked();status('Berhasil logout.')});
-$$('input[name=scope]').forEach(r=>r.onchange=()=>{log('Scope diubah ke '+scope()+'.');loadStatus()});
+$$('input[name=scope]').forEach(r=>r.onchange=()=>{log('Scope diubah ke '+scope()+'.');loadStatus();loadTargets()});
 
 // ─ Skills ─
 function item(tag,html,ctrl){const el=document.createElement(tag);el.className='item';const d=document.createElement('div');d.innerHTML=html;ctrl&&el.append(ctrl);el.append(d);return el}
@@ -84,7 +84,9 @@ $('#install-skills').onclick=()=>{const ids=[...selectedSkills];if(!ids.length)r
 // ─ MCP ─
 function renderMcp(){const conf=new Set((lastStatus&&lastStatus.mcp.servers||[]).map(s=>s.name));
   $('#mcp').replaceChildren(...catalog.mcpServers.map(m=>{const b=Object.assign(document.createElement('button'),{type:'button',textContent:'Daftarkan',className:'secondary'});
-  b.onclick=()=>{if(!confirmGlobal('Daftarkan MCP '+m.id))return;busy(b,'Mendaftarkan MCP…',async()=>{const r=await post('/api/mcp',{scope:scope(),id:m.id,confirm:true,confirmGlobal:scope()==='global'});done('✓ '+r.message);await loadStatus()})};
+  b.onclick=()=>{if(!confirmGlobal('Daftarkan MCP '+m.id))return;busy(b,'Mendaftarkan MCP…',async()=>{const r=await post('/api/mcp',{scope:scope(),id:m.id,confirm:true,confirmGlobal:scope()==='global'});
+    const diff=$('#mcp-diff');if(diff){diff.innerHTML=`<strong>Perubahan mcp_config.json</strong><div>${esc(r.config)}</div><small>Ditambahkan: ${esc((r.added||[]).join(', ')||'—')}${r.updated&&r.updated.length?' · diperbarui: '+esc(r.updated.join(', ')):''} · total server: ${esc(String((r.servers||[]).length))}${r.backup?' · backup: '+esc(r.backup):' · file baru, tanpa backup'}</small>`;show(diff)}
+    done('✓ '+r.message);await loadStatus();await loadTargets()})};
   const el=item('div',`<strong>${esc(m.label||m.id)}</strong>${conf.has(m.id)?'<span class="pill ok">CONFIGURED</span>':''}<small>${esc(m.id)} · runtime belum diverifikasi</small><span class="muted">${esc(m.description)}</span>`);el.append(b);return el}));
   if(!catalog.mcpServers.length)$('#mcp').textContent='Tidak ada MCP di katalog.'}
 
@@ -115,9 +117,51 @@ $('#install-repo').onclick=()=>{if(!repoCache)return;const ids=$$('#repo-results
 function renderActivity(){$('#activity-log').innerHTML=activity.length?activity.map(a=>`<li class="${a.err?'error':''}"><time>${a.at.toLocaleTimeString()}</time> ${esc(a.t)}</li>`).join(''):'<li class="muted">Belum ada aktivitas di sesi ini.</li>'}
 $('#clear-activity').onclick=()=>{activity.length=0;renderActivity()};
 
+
+// ─ Antigravity effect: Canvas 2D adaptation, runs only while Home is visible ─
+let agFx=null;
+(function(){const cv=$('#antigravity-canvas');if(!cv)return;
+  if(typeof initAntigravity!=='function'||!cv.getContext||!cv.getContext('2d')){cv.remove();$('.collab-logos')&&$('.collab-logos').classList.add('fallback');return}
+  agFx=initAntigravity(cv)})();
+function syncFx(page){if(!agFx)return;page==='home'&&!$('#content').hidden?agFx.start():agFx.stop()}
+
+// ─ Targets: detection, effective paths, custom override ─
+let targets=null;
+const pathRow=(label,value,extra='')=>`<div class="target-row"><strong>${esc(label)}</strong><div>${esc(value)}</div>${extra}</div>`;
+async function loadTargets(){if(!csrf)return;try{targets=await getJson('/api/targets?scope='+encodeURIComponent(scope()));renderTargets()}catch(e){$('#target-detection').textContent='Deteksi gagal: '+e.message}}
+function renderTargets(){const d=targets;if(!d)return;
+  const badge=$('#target-badge');
+  badge.textContent=d.antigravityDetected?'TERDETEKSI':'TIDAK TERDETEKSI';
+  badge.className='pill '+(d.antigravityDetected?'ok':'bad');
+  const app=d.applicationDetected?`Aplikasi Antigravity ditemukan di ${d.applicationEvidence.join(', ')}.`:'Aplikasi Antigravity tidak terlihat di lokasi install standar.';
+  const cfg=d.configEvidence.length?('Bukti konfigurasi: '+d.configEvidence.join(' · ')):'Tidak ada bukti konfigurasi Antigravity di luar repo ini.';
+  $('#target-detection').textContent=`${cfg} ${app}${d.envOverride?' Override env aktif: '+d.envOverride+'.':''}`;
+  const eff=d.effective[scope()];
+  $('#target-effective').innerHTML=
+    pathRow('Skills ('+scope()+')',eff.skillsDirs.join('  |  '))+
+    pathRow('MCP config ('+scope()+')',eff.mcpFile)+
+    d.candidates.filter(c=>c.recommended).map(c=>pathRow('Rekomendasi '+c.kind+' / '+c.scope,c.dir||c.file,
+      `<small>${esc(c.evidence.join(' · '))} — confidence ${esc(c.confidence)}, ${c.writable?'writable':'tidak writable'}</small>`)).join('')+
+    (d.manualSteps.length?`<div class="target-row"><strong>Langkah manual</strong><ol>${d.manualSteps.map(x=>`<li>${esc(x)}</li>`).join('')}</ol></div>`:'');
+  const custom=d.custom||{};const active=custom.skillsDir||custom.mcpFile;
+  show($('#custom-active'),Boolean(active));
+  if(active)$('#custom-active-path').textContent=[custom.skillsDir&&('skills: '+custom.skillsDir),custom.mcpFile&&('mcp: '+custom.mcpFile)].filter(Boolean).join(' · ');
+}
+$('#validate-custom').onclick=()=>{const skillsDir=$('#custom-skills').value.trim(),mcpFile=$('#custom-mcp').value.trim();
+  if(!skillsDir&&!mcpFile)return status('Tempel minimal satu path absolut.',true);
+  busy($('#validate-custom'),'Memvalidasi path di server…',async()=>{const r=await post('/api/targets/custom',{confirm:true,skillsDir:skillsDir||undefined,mcpFile:mcpFile||undefined});
+    $('#target-checks').innerHTML=r.checks.map(c=>`<div class="check-row"><strong>${esc(c.kind)} · ${c.exists?'ADA':'BELUM ADA'} · ${c.writable?'WRITABLE':'TIDAK WRITABLE'}</strong><div>${esc(c.path)}</div><small>${esc(c.evidence.join(' · '))}</small></div>`).join('');
+    done('✓ Target kustom aktif (hanya di memori proses).');await loadTargets();await loadStatus()})};
+$('#reset-custom').onclick=()=>busy($('#reset-custom'),'Mereset target…',async()=>{await post('/api/targets/custom',{confirm:true,reset:true});$('#target-checks').innerHTML='';done('✓ Target kembali ke hasil deteksi.');await loadTargets();await loadStatus()});
+// Helper only: the browser never yields an absolute path, so this fills nothing automatically.
+if(window.showOpenFilePicker){const btn=$('#choose-mcp');show(btn);
+  btn.onclick=async()=>{try{const [h]=await window.showOpenFilePicker({types:[{description:'mcp_config.json',accept:{'application/json':['.json']}}]});
+    const f=await h.getFile();let valid=null;try{JSON.parse(await f.text());valid=true}catch{valid=false}
+    $('#chooser-note').textContent=`Dipilih: ${f.name} (${valid?'JSON valid':'JSON rusak'}). Ini hanya bantuan nama/isi — tempel path absolutnya di kolom di atas lalu klik Validasi.`}catch{}}}
+
 // ─ Catalog ─
 async function loadCatalog(){show($('#progress'));status('Memuat katalog…');
   try{catalog=await getJson('/api/catalog');$('#workspace').textContent=catalog.cwd;$('#stat-skills').textContent=catalog.skills.length;$('#stat-mcp').textContent=catalog.mcpServers.length;
-  renderSkills();renderMcp();renderSources();done(`✓ ${catalog.skills.length} skill, ${catalog.mcpServers.length} MCP.`);await loadStatus()}catch(e){fail(e)}finally{show($('#progress'),false)}}
+  renderSkills();renderMcp();renderSources();await loadTargets();done(`✓ ${catalog.skills.length} skill, ${catalog.mcpServers.length} MCP.`);await loadStatus()}catch(e){fail(e)}finally{show($('#progress'),false)}}
 
-(async()=>{renderActivity();go(location.hash.slice(1));if(await checkSession()){log('Login terverifikasi.');await loadCatalog()}else showLocked()})();
+(async()=>{renderActivity();go(location.hash.slice(1)||'home');if(await checkSession()){log('Login terverifikasi.');await loadCatalog()}else showLocked()})();

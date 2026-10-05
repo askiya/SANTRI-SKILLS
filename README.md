@@ -264,3 +264,6 @@ npm pack --dry-run
 ## Lisensi
 
 [MIT](LICENSE)
+
+### Override lokasi Antigravity
+Dashboard menghormati `SANTRI_SKILLS_AG_HOME` (prioritas) atau `ANTIGRAVITY_HOME` untuk memindahkan basis config global dari `~/.gemini/config`. Override hanya berlaku pada proses dashboard. Target kustom UI hanya disimpan di memori proses dan harus lolos validasi path aman.

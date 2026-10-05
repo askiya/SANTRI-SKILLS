@@ -86,6 +86,13 @@ test('mcp config: malformed invalid, bad entries dropped, no secrets echoed', ()
   fs.rmSync(cwd, { recursive: true, force: true });
 });
 
+test('invalid MCP object shapes never change config or backup', () => {
+ const {addMcpServer}=require('../src/install');const cwd=tmp();const file=path.join(cwd,'mcp_config.json');
+ try {for(const raw of ['[]','null','42','{"mcpServers":[]}','{"mcpServers":null}']) {
+  fs.writeFileSync(file,raw);fs.writeFileSync(file+'.bak','keep backup');
+  assert.throws(()=>addMcpServer(file),/object|objek/i);assert.equal(fs.readFileSync(file,'utf8'),raw);assert.equal(fs.readFileSync(file+'.bak','utf8'),'keep backup');
+ }} finally {fs.rmSync(cwd,{recursive:true,force:true});}
+});
 test('scope is strictly validated', () => {
   for (const bad of ['', 'Project', 'both', null, undefined, 'global ']) assert.throws(() => configStatus(bad, tmp(), tmp()), /Scope invalid/);
   assert.equal(configStatus('global', tmp(), tmp()).scope, 'global');

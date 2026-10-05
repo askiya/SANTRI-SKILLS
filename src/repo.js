@@ -120,7 +120,7 @@ async function installFromRepo(url, branch, selectedIds, targets, opts) {
   return withRepoSkills(url, branch, (skills, info) => {
     const unknown = ids.filter((id) => !skills.some((s) => s.id === id));
     if (unknown.length) throw new Error(`Skill tidak ada di repo: ${unknown.join(', ')}`);
-    const result = installSkills(skills.filter((s) => ids.includes(s.id)), targets, opts);
+    const result = installSkills(skills.filter((s) => ids.includes(s.id)), typeof targets === 'function' ? targets() : targets, opts);
     return { repo: `${info.owner}/${info.repo}`, branch: info.ref, installed: result.installed.length, skipped: result.skipped.length };
   });
 }
