@@ -1,5 +1,15 @@
 'use strict';
 const { test } = require('node:test');
+test('failed skill replacement preserves prior SKILL.md',()=>{
+ const {installSkills,MARKER}=require('../src/install');
+ const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'santri-atomic-'));
+ try {const target=path.join(root,'target'),dest=path.join(target,'demo'),source=path.join(root,'source');
+  fs.mkdirSync(dest,{recursive:true});fs.mkdirSync(source);fs.writeFileSync(path.join(dest,'SKILL.md'),'old');fs.writeFileSync(path.join(dest,MARKER),'{}');
+  assert.throws(()=>installSkills([{id:'demo',dir:source,source:'test'}],[target]),/SKILL.md/);
+  assert.equal(fs.readFileSync(path.join(dest,'SKILL.md'),'utf8'),'old');
+ }finally{fs.rmSync(root,{recursive:true,force:true})}
+});
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -50,6 +60,8 @@ test('malformed marker and stale timestamp stay visible but valid-flagged', () =
   const s = configStatus('project', cwd, tmp());
   const by = Object.fromEntries(s.skills.map((k) => [k.id, k]));
   assert.equal(by.broken.markerValid, false);
+  writeSkill(target, 'incomplete', { marker: '{}' });
+  assert.equal(configStatus('project', cwd, tmp()).skills.find(x => x.id === 'incomplete').markerValid, false);
   assert.equal(by.broken.managed, true);
   assert.equal(by.stale.installedAt, null, 'unparseable date must not be echoed');
   assert.equal(by.stale.source, null, 'non-string source must not be echoed');
@@ -78,11 +90,29 @@ test('mcp config: malformed invalid, bad entries dropped, no secrets echoed', ()
   } }));
   s = configStatus('project', cwd, tmp());
   assert.deepEqual(s.mcp.servers.map((x) => x.name), ['good']);
-  assert.deepEqual(Object.keys(s.mcp.servers[0]).sort(), ['configured', 'managed', 'name', 'runtime']);
+  assert.deepEqual(Object.keys(s.mcp.servers[0]).sort(), ['configured', 'kind', 'managed', 'name', 'runtime']);
   assert.equal(s.mcp.servers[0].runtime, 'unverified');
   assert.ok(!JSON.stringify(s).includes('SECRET_VALUE'), 'env/command secrets must not leave the helper');
   assert.ok(!JSON.stringify(s).includes('npx'));
   assert.equal(s.configured, true);
+  fs.rmSync(cwd, { recursive: true, force: true });
+});
+
+test('mcp config lists stdio and remote entries by kind without exposing secrets', () => {
+  const cwd = tmp(), file = mcpConfigPath('project', cwd);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: {
+    stdio: { command: 'SECRET_COMMAND', args: ['SECRET_ARG'], env: { TOKEN: 'SECRET_TOKEN' } },
+    remote: { serverUrl: 'https://user:SECRET_PASSWORD@example.test/mcp', headers: { Authorization: 'SECRET_HEADER' } },
+    legacy: { httpUrl: 'http://example.test/mcp' },
+    invalid: { serverUrl: 'file:///secret' },
+  } }));
+  const status = configStatus('project', cwd, tmp());
+  assert.deepEqual(status.mcp.servers.map(({ name, kind }) => ({ name, kind })), [
+    { name: 'stdio', kind: 'stdio' }, { name: 'remote', kind: 'remote' }, { name: 'legacy', kind: 'remote' },
+  ]);
+  assert.equal(status.mcp.servers.length, 3);
+  assert.doesNotMatch(JSON.stringify(status), /SECRET_COMMAND|SECRET_ARG|SECRET_TOKEN|SECRET_PASSWORD|SECRET_HEADER|example\.test/);
   fs.rmSync(cwd, { recursive: true, force: true });
 });
 

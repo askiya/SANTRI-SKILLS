@@ -61,7 +61,7 @@ santriverse-skills install
 
 ## Dashboard premium lokal
 
-Dashboard menyediakan katalog premium, preview repo GitHub, instalasi skill, dan katalog MCP lewat browser:
+Dashboard menyediakan katalog premium, preview repo GitHub, instalasi skill, katalog MCP, dan preset website React Bits lewat browser. Mode website bukan crawler: hanya URL persis `https://reactbits.dev/get-started/mcp` yang diterima. Preview tidak mengambil halaman dan tidak menjalankan `npx`:
 
 ```bash
 node bin/cli.js dashboard
@@ -79,6 +79,20 @@ Klik **Login dengan Santriverse**. Dashboard membuat `state` acak dan PKCE verif
 Token sesi hanya hidup di memori proses server lokal: token tidak ditulis ke disk, localStorage, cookie, HTML, respons browser, atau log. Restart dashboard selalu meminta login ulang. Setiap endpoint katalog, preview, install, dan MCP memverifikasi sesi premium ke API pada setiap panggilan; respons 401/403 dan kegagalan jaringan gagal tertutup sebelum penulisan file.
 
 Dashboard hanya bind ke loopback `127.0.0.1`. Jangan proxy atau mengekspos port ini. Biarkan terminal berjalan selama dashboard dipakai; tekan `Ctrl+C` untuk berhenti.
+
+### React Bits melalui preset website
+
+1. Klik **Tambah Skills / MCP → MCP Servers → Website dikenal**. URL tetap `https://reactbits.dev/get-started/mcp`; URL lain ditolak, termasuk variasi query dan trailing slash.
+2. Klik **Preview aman**, pilih `shadcn`, salin registry berikut dan **merge** dengan `components.json` pada **setiap project** (jangan mengganti konfigurasi lain):
+
+```json
+{"registries":{"@react-bits":"https://reactbits.dev/r/{name}.json"}}
+```
+
+3. Activation menampilkan risiko dan meminta persetujuan. Config global `~/.gemini/config/mcp_config.json` mendapat `"shadcn":{"command":"npx","args":["shadcn@latest","mcp"]}`. Ini konfigurasi manual dari [shadcn MCP](https://ui.shadcn.com/docs/mcp), bukan `mcp init --client claude` yang khusus Claude.
+4. **Peringatan keamanan:** `@latest` tidak dipin; IDE dapat mengunduh dan menjalankan kode jaringan lewat `npx` ketika MCP dimuat. Node.js/npm dan jaringan diperlukan. Dashboard tidak menjalankan perintah ini. Belum ada versi pin yang dipilih atau diverifikasi.
+5. Config ditulis atomik; server lain dipertahankan. Entri `shadcn` lama, bahkan identik, tidak diadopsi. Backup `.bak` yang sudah ada ditolak saat pemasangan preset agar tidak tertimpa; pindahkan manual setelah memeriksanya. Marker `mcp_config.json.santrihub.json` memungkinkan uninstall hanya selama config masih persis milik preset.
+6. Refresh MCP di Antigravity. **Config ada bukan IDE terverifikasi.** Callback SantriHub hanya membuktikan bridge `santri-skills`, bukan `shadcn`. Registry project tidak ditulis otomatis dan config global saja belum membuat React Bits tersedia pada project.
 
 ### Endpoint remote
 
@@ -187,8 +201,7 @@ node bin/cli.js update --scope=global --yes
 | Scope | Agent Skills | Konfigurasi MCP |
 |---|---|---|
 | `project` | `<project>/.agents/skills/` | `<project>/.agents/mcp_config.json` |
-| `global` (IDE) | `~/.gemini/config/skills/` | `~/.gemini/config/mcp_config.json` |
-| `global` (CLI) | `~/.gemini/antigravity-cli/skills/` | memakai konfigurasi global |
+| `global` | `~/.gemini/config/skills/` | `~/.gemini/config/mcp_config.json` |
 
 Gunakan `project` untuk isolasi per repository. Gunakan `global` jika skill perlu tersedia bagi seluruh project Antigravity milik pengguna saat ini. Reload Antigravity setelah `install`, `update`, atau `mcp-install`.
 
@@ -200,10 +213,11 @@ Folder asing tidak dihapus atau ditimpa secara default. `uninstall` hanya mengha
 node bin/cli.js mcp-install --scope=project
 ```
 
-Installer menambahkan entry `santri-skills` tanpa menghapus MCP server lain. MCP lokal menyediakan:
+Installer menambahkan entry `santri-skills` tanpa menghapus MCP server lain. File config valid hanya membuktikan entry ada di disk, bukan bahwa IDE sudah memuat prosesnya. Sesudah reload, minta chat Antigravity memanggil tool `santrihub_status` dari server `santri-skills`. Hasil asli memuat `server`, `version`, `installationRoot`, dan `nodeExecutable`; tool tidak tersedia berarti runtime belum terbukti dimuat.
 
 | Tool | Fungsi |
 |---|---|
+| `santrihub_status` | Bukti read-only proses MCP aktif dan identitas instalasinya; tanpa config/secret |
 | `list_skills` | Daftar skill dan deskripsinya |
 | `get_skill` | Baca isi lengkap satu `SKILL.md` |
 | `search_docs` | Cari Markdown dari dua repository sumber |

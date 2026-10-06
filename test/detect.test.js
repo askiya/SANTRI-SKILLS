@@ -40,6 +40,18 @@ test('resolver writes only chosen detected skill target and honors env overrides
   assert.throws(()=>resolveForWrite('project',opts),/symlink|junction/);
  } finally {fs.rmSync(base,{recursive:true,force:true});}
 });
+test('global targets stay official even when app-owned runtime directories contain skills',()=>{
+ const {detectTargets,resolveTargets,validateCustomTargets}=require('../src/detect');
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'santri-owned-'));
+ try {
+  const app=path.join(home,'.gemini','antigravity-ide','builtin','skills');fs.mkdirSync(path.join(app,'demo'),{recursive:true});fs.writeFileSync(path.join(app,'demo','SKILL.md'),'fixture');
+  const opts={home,cwd:home,env:{},platform:process.platform};const d=detectTargets(opts);
+  assert.ok(!d.candidates.some(c=>(c.dir||c.file||'').includes('antigravity-ide')));
+  assert.deepEqual(resolveTargets('global',opts).skillsDirs,[path.join(home,'.gemini','config','skills')]);
+  assert.equal(resolveTargets('global',opts).mcpFile,path.join(home,'.gemini','config','mcp_config.json'));
+  assert.throws(()=>validateCustomTargets({confirm:true,skillsDir:app},{cwd:path.resolve(__dirname,'..')}),/app-owned|runtime|antigravity-ide/);
+ } finally {fs.rmSync(home,{recursive:true,force:true});}
+});
 test('custom validation rejects junction/symlink ancestors, ADS, and device paths',()=>{
  const {validateCustomTargets}=require('../src/detect');
  const base=fs.mkdtempSync(path.join(os.tmpdir(),'santri-custom-'));

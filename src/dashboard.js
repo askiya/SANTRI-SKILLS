@@ -7,12 +7,15 @@ const { createSession, AuthError } = require('./auth');
 const { fetchSource, listSkills } = require('./sources');
 async function remoteSkills(reg) { const skills=[]; for(const source of reg.sources) { const root=await fetchSource(source); skills.push(...listSkills(source,root)); } return skills; }
 const { mcpCatalog } = require('./registry');
-const { installSkills, addMcpServer, configStatus } = require('./install');
+const { installSkills, addMcpServer, configStatus, removeInstalled, SHADCN_ENTRY } = require('./install');
+const REACT_BITS_URL='https://reactbits.dev/get-started/mcp';
+const REACT_BITS_REGISTRY={registries:{'@react-bits':'https://reactbits.dev/r/{name}.json'}};
+const WEBSITE_WARNING='shadcn@latest tidak dipin. Antigravity dapat menjalankan npx dan mengunduh kode jaringan saat MCP dimuat; hanya lanjut jika mempercayai paket dan jaringan. Runtime IDE belum diverifikasi.';
 const { previewRepo, installFromRepo, parseGithubRepo } = require('./repo');
 const { skillSnapshot, mcpSnapshot, assertNoLinks } = require('./local-import');
 const os = require('node:os');
 const {previewGithub,publicPreview}=require('./github-import');
-const {mcpRuntimeStatus}=require('./runtime-status');
+const {mcpKind,mcpRuntimeStatus}=require('./runtime-status');
 const {runControl,pythonCommand}=require('./antigravity-control');
 const publicLocalSkills = skills => skills.map(s => ({ id:s.id, name:s.name, description:s.description, files:s.files.length, bytes:s.files.reduce((n,f)=>n+f.data.length,0) }));
 function copyLocalSkills(skills, targets) {
@@ -42,6 +45,7 @@ const STATIC = {
   '/': { file: 'dashboard.html', type: 'text/html; charset=utf-8' },
   '/dashboard.css': { file: 'dashboard.css', type: 'text/css' },
   '/dashboard-ui.js': { file: 'dashboard-ui.js', type: 'text/javascript' },
+  '/wizard.js': { file: 'wizard.js', type: 'text/javascript' },
   '/antigravity.js': { file: 'antigravity.js', type: 'text/javascript' },
   '/assets/santriverse-logo.webp': { file: '../assets/santriverse-logo.webp', type: 'image/webp' },
   '/assets/santriverse-logo-light.webp': { file: '../assets/santriverse-logo-light.webp', type: 'image/webp' },
@@ -49,16 +53,22 @@ const STATIC = {
 };
 
 const MAX_BODY = 16384;
-// Names only; values (command/env/headers) never leave this helper.
-function configStatusNames(file) { try { const c = JSON.parse(fs.readFileSync(file, 'utf8') || '{}'); return c && c.mcpServers && typeof c.mcpServers === 'object' && !Array.isArray(c.mcpServers) ? c.mcpServers : {}; } catch { return {}; } }
+// Private entries for PATH checks; only safe metadata is sent in API responses.
+function configStatusNames(file) { try { const c = JSON.parse(fs.readFileSync(file, 'utf8') || '{}'); return c && c.mcpServers && typeof c.mcpServers === 'object' && !Array.isArray(c.mcpServers) ? Object.fromEntries(Object.entries(c.mcpServers).filter(([,entry])=>mcpKind(entry))) : {}; } catch { return {}; } }
 
-function createDashboardServer({ cwd = process.cwd(), home, env = process.env, apiUrl, websiteUrl, githubFetch = globalThis.fetch, controlRunner = runControl } = {}) {
+function createDashboardServer({ cwd = process.cwd(), home, env = process.env, apiUrl, websiteUrl, githubFetch = globalThis.fetch, controlRunner = runControl, bridgeFile } = {}) {
   const session = createSession({ apiUrl, websiteUrl });
+  const capabilityFile=bridgeFile||path.join(home||os.homedir(),'.santrihub','bridge.json');
+  let verification=null;
+  const clearVerification=()=>{verification=null;assertNoLinks(capabilityFile);fs.rmSync(capabilityFile,{force:true});};
+  const binding=()=>{const t=resolveTargets('global',targetOptions());const hash=crypto.createHash('sha256').update(JSON.stringify(t));for(const file of [t.mcpFile,...t.skillsDirs.flatMap(dir=>fs.existsSync(dir)?fs.readdirSync(dir).map(id=>path.join(dir,id,'SKILL.md')):[])]){assertNoLinks(file);hash.update(file);if(fs.existsSync(file)&&fs.statSync(file).isFile())hash.update(fs.readFileSync(file));}return hash.digest('hex');};
+  const evidence=()=>{if(verification&&(verification.expires<=Date.now()||verification.binding!==binding()))clearVerification();return {verified:Boolean(verification&&verification.evidence),pending:Boolean(verification&&!verification.evidence),expiresAt:verification?verification.expires:null,evidence:verification?verification.evidence:null,note:'Bukti hanya bridge santri-skills. MCP lain belum diketahui; file Skills bukan bukti dimuat IDE. Identitas IDE tidak diautentikasi.'};};
   const csrfTokens = new Map();
   let busy = false;
   // In-memory only. Preview tokens bind exact source + state + selected kind; expire after 10 min.
   const localPreviews = new Map();
   const githubPreviews = new Map();
+  const websitePreviews = new Map();
   const putPreview = (kind, source, hash, scope) => {
     const id = crypto.randomBytes(24).toString('hex');
     localPreviews.set(id, { kind, source, hash, scope, target: JSON.stringify(resolveTargets(scope,targetOptions())), expires: Date.now() + 600_000 });
@@ -87,7 +97,7 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
     return tok;
   }
 
-  return http.createServer(async (req, res) => {
+  const server=http.createServer(async (req, res) => {
     const port = req.socket.localPort;
     const origin = `http://127.0.0.1:${port}`;
     const send = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
@@ -108,6 +118,19 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         res.writeHead(200, headers);
         return res.end(fs.readFileSync(path.join(__dirname, stat.file)));
       }
+
+      if(req.method==='POST'&&req.url==='/api/verification/bridge'){
+        await session.requirePremium();
+        if(req.socket.remoteAddress!=='127.0.0.1')throw new AuthError(403,'Callback hanya loopback.');
+        if(req.headers.origin||req.headers['content-type']!=='application/json')throw new AuthError(403,'Callback ditolak.');
+        let raw='';for await(const c of req){raw+=c;if(Buffer.byteLength(raw)>1024)throw new AuthError(400,'Callback terlalu besar.');}
+        const body=JSON.parse(raw),token=req.headers['x-santrihub-bridge'];evidence();
+        if(!verification||typeof token!=='string'||token.length!==64||!crypto.timingSafeEqual(Buffer.from(token),Buffer.from(verification.token))||body.challenge!==verification.challenge||!['initialize','tool'].includes(body.event))throw new AuthError(403,'Callback invalid atau kedaluwarsa.');
+        if(verification.evidence)throw new AuthError(409,'Callback sudah dipakai.');
+        verification.evidence={server:'santri-skills',level:'bridge-mcp-loaded',source:'local-capability-callback',event:body.event,observedAt:new Date().toISOString(),identityAuthenticated:false};
+        return send(200,{accepted:true});
+      }
+      if(req.method==='GET'&&req.url==='/api/verification/status'){await session.requirePremium();return send(200,evidence());}
 
       // ── Auth callback page (GET, public – receives hash fragment in browser) ──
       if (req.method === 'GET' && req.url.startsWith('/auth/callback')) {
@@ -143,7 +166,7 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
       }
       if (req.method === 'POST' && req.url === '/api/auth/logout') {
         await readBody();
-        localPreviews.clear();githubPreviews.clear();csrfTokens.clear();
+        clearVerification();localPreviews.clear();githubPreviews.clear();websitePreviews.clear();csrfTokens.clear();
         await session.logout();
         return send(200, { message: 'Logged out' });
       }
@@ -160,16 +183,16 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         await session.requirePremium();
         const u = new URL(req.url, origin);
         const scopes = u.searchParams.getAll('scope');
-        if (u.pathname !== '/api/targets' || [...u.searchParams.keys()].some(k => k !== 'scope') || scopes.length !== 1 || !['project','global'].includes(scopes[0])) throw new AuthError(400, 'Parameter targets invalid.');
+        if (u.pathname !== '/api/targets' || [...u.searchParams.keys()].some(k => k !== 'scope') || scopes.length !== 1 || scopes[0]!=='global') throw new AuthError(400, 'Parameter targets invalid.');
         const detection = detectTargets({ cwd, home, env });
-        return send(200, { ...detection, custom: customTargets, effective: Object.fromEntries(['project','global'].map(s => [s, resolveTargets(s, { ...targetOptions(), detection })])) });
+        return send(200, { ...detection, custom: customTargets, effective: Object.fromEntries(['global'].map(s => [s, resolveTargets(s, { ...targetOptions(), detection })])) });
       }
       if (req.method === 'GET' && req.url.startsWith('/api/status')) {
         await session.requirePremium();
         const requestUrl = new URL(req.url, origin);
         if (requestUrl.pathname !== '/api/status' || [...requestUrl.searchParams.keys()].some((key) => key !== 'scope')) throw new AuthError(400, 'Parameter status invalid.');
         const scopes = requestUrl.searchParams.getAll('scope');
-        if (scopes.length !== 1 || !['project', 'global'].includes(scopes[0])) throw new AuthError(400, 'Scope invalid.');
+        if (scopes.length !== 1 || scopes[0]!=='global') throw new AuthError(400, 'Scope invalid.');
         const target = resolveTargets(scopes[0], targetOptions());
         return send(200, configStatus(scopes[0], cwd, home, { skillTargets: target.skillsDirs, mcpFile: target.mcpFile }));
       }
@@ -190,18 +213,28 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
       if (req.method !== 'POST') return send(404, { error: 'Tidak ditemukan' });
       await session.requirePremium();
       const input = await readBody();
+      if(input.scope!=null&&input.scope!=='global')throw new AuthError(400,'Dashboard hanya scope global.');
+      if(['/api/verification/start','/api/uninstall'].includes(req.url)){
+        if(!input._csrf||!csrfTokens.has(input._csrf)||Date.now()-csrfTokens.get(input._csrf)>900_000)throw new AuthError(403,'Token CSRF invalid.');
+        if(req.url==='/api/uninstall'){if(input.confirm!==true||input.confirmGlobal!==true)throw new AuthError(400,'Konfirmasi uninstall global wajib.');const target=resolveForWrite('global',{...targetOptions(),kind:input.kind==='skill'?'skills':'mcp'});const result=removeInstalled({kind:input.kind,id:input.id,skillsDir:target.skillsDirs[0],mcpFile:target.mcpFile});clearVerification();return send(200,result);}
+        clearVerification();const target=resolveTargets('global',targetOptions());const status=configStatus('global',cwd,home,{skillTargets:target.skillsDirs,mcpFile:target.mcpFile});
+        if(!status.mcp.servers.some(s=>s.name==='santri-skills'&&s.managed))throw new AuthError(409,'Pasang bridge MCP santri-skills resmi sebelum verifikasi callback.');
+        const challenge=crypto.randomBytes(32).toString('hex');verification={challenge,token:crypto.randomBytes(32).toString('hex'),binding:binding(),expires:Date.now()+300000,evidence:null};
+        assertNoLinks(capabilityFile);fs.mkdirSync(path.dirname(capabilityFile),{recursive:true,mode:0o700});fs.writeFileSync(capabilityFile,JSON.stringify({port,token:verification.token,challenge,expires:verification.expires}),{flag:'wx',mode:0o600});
+        return send(200,{challenge,expiresAt:verification.expires,prompt:'Panggil tool santrihub_status dari MCP santri-skills. Jawaban asli saja.',note:'Bridge loaded saja; bukan bukti semua MCP atau Skills dimuat IDE.'});
+      }
       if (input.scope === 'global' && req.url !== '/api/verify' && !req.url.endsWith('/preview') && input.confirmGlobal !== true) throw new AuthError(400, 'Konfirmasi global wajib.');
 
       // CSRF on write operations
       if (['/api/install', '/api/mcp', '/api/repo/install', '/api/repo/preview', '/api/targets/custom',
            '/api/local/skills/preview', '/api/local/skills/install',
-           '/api/local/mcp/preview', '/api/local/mcp/install', '/api/github/preview', '/api/github/install', '/api/verify', '/api/antigravity/control'].includes(req.url)) {
+           '/api/local/mcp/preview', '/api/local/mcp/install', '/api/github/preview', '/api/github/install', '/api/website/preview', '/api/website/install', '/api/verify', '/api/antigravity/control'].includes(req.url)) {
         if (!input._csrf || !csrfTokens.has(input._csrf) || Date.now()-csrfTokens.get(input._csrf)>900_000) return send(403, { error: 'Token CSRF tidak valid. Muat ulang halaman.' });
       }
 
       if (req.url === '/api/targets/custom') {
         const result = validateCustomTargets(input, { cwd: path.resolve(__dirname, '..') });
-        customTargets = { skillsDir: result.skillsDir, mcpFile: result.mcpFile };localPreviews.clear();
+        clearVerification();customTargets = { skillsDir: result.skillsDir, mcpFile: result.mcpFile };localPreviews.clear();
         return send(200, { custom: customTargets, checks: result.checks, persisted: false });
       }
 
@@ -257,6 +290,25 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         const existed = fs.existsSync(config);
         const servers = mergeLocalMcp(config, Object.fromEntries(names.map(n => [n, snap.entries[n]])));
         return send(200, { source: snap.source, scope: input.scope, config, added: names, servers, backup: existed ? `${config}.bak` : null, message: `${names.length} MCP lokal didaftarkan. Reload Antigravity.` });
+      }
+
+      if (req.url === '/api/website/preview') {
+        if(input.url!==REACT_BITS_URL)throw new AuthError(400,'Preset website tidak dikenal. Hanya URL dokumentasi React Bits yang didukung persis.');
+        if(input.scope!=='global')throw new AuthError(400,'Scope invalid.');
+        const target=resolveTargets('global',targetOptions()),previewId=crypto.randomBytes(24).toString('hex');
+        for(const [id,p] of websitePreviews)if(p.expires<=Date.now())websitePreviews.delete(id);
+        while(websitePreviews.size>=10)websitePreviews.delete(websitePreviews.keys().next().value);
+        websitePreviews.set(previewId,{url:REACT_BITS_URL,target:JSON.stringify(target),expires:Date.now()+600000});
+        return send(200,{previewId,source:'website-preset',url:REACT_BITS_URL,name:'shadcn',entry:SHADCN_ENTRY,target:target.mcpFile,registry:REACT_BITS_REGISTRY,registryInstruction:'Salin blok registries ke components.json pada SETIAP project yang memakai React Bits. Konfigurasi global tidak dapat menggantikannya.',warning:WEBSITE_WARNING,runtime:'unverified',fetched:false});
+      }
+      if (req.url === '/api/website/install') {
+        if(input.url!==REACT_BITS_URL)throw new AuthError(409,'Sumber berbeda dari preview. Preview ulang.');
+        if(input.confirm!==true||input.consentNetworkExecution!==true)throw new AuthError(400,'Konfirmasi risiko eksekusi jaringan wajib.');
+        const held=websitePreviews.get(input.previewId);websitePreviews.delete(input.previewId);
+        if(!held||held.expires<=Date.now()||held.url!==input.url||held.target!==JSON.stringify(resolveTargets('global',targetOptions())))throw new AuthError(409,'Preview tidak ada, kedaluwarsa, atau target berubah. Preview ulang.');
+        const config=resolveForWrite('global',{...targetOptions(),kind:'mcp'}).mcpFile,existed=fs.existsSync(config);
+        addMcpServer(config,SHADCN_ENTRY,'shadcn',{preset:'react-bits'});clearVerification();
+        return send(200,{name:'shadcn',config,backup:existed?config+'.bak':null,runtime:'unverified',warning:WEBSITE_WARNING,registry:REACT_BITS_REGISTRY});
       }
 
       if (req.url === '/api/github/preview') {
@@ -322,27 +374,41 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         const status = configStatus(input.scope, cwd, home, { skillTargets: target.skillsDirs, mcpFile: target.mcpFile });
         const raw = status.mcp.exists ? configStatusNames(status.mcp.configFile) : {};
         status.mcp.servers = status.mcp.servers.map(s => ({ ...s, ...mcpRuntimeStatus(raw[s.name], env) }));
+        const skillsCatalog = await remoteSkills(await session.catalog());
+        const mcpCandidates = mcpCatalog(await session.catalog());
+        if (input.skillIds != null && (!Array.isArray(input.skillIds) || input.skillIds.length > 1000 || input.skillIds.some(id=>typeof id !== 'string' || !skillsCatalog.some(s=>s.id===id)))) throw new AuthError(400, 'Kandidat skill invalid.');
+        const skillIds = [...new Set([...status.skills.map(s=>s.id), ...(input.skillIds||[])])];
+        const skillChecks = skillIds.map(id=>{const found=status.skills.find(s=>s.id===id);return {id,exists:Boolean(found),path:found?path.join(found.dir,'SKILL.md'):path.join(target.skillsDirs[0],id,'SKILL.md')};});
+        const mcpIds = [...new Set([...status.mcp.servers.map(s=>s.name), ...mcpCandidates.map(m=>m.builtin?'santri-skills':m.id)])];
+        const mcpChecks = mcpIds.map(name=>status.mcp.servers.find(s=>s.name===name)||{name,configured:false,runtime:'belum terpasang',available:null});
         const python = pythonCommand(env);
-        return send(200, { ...status, checkedAt: new Date().toISOString(), python: python ? 'tersedia' : 'python3/python tidak ditemukan di PATH',
+        return send(200, { ...status, skillChecks, mcpChecks, workspace: cwd, checkedAt: new Date().toISOString(), python: python ? 'tersedia' : 'python3/python tidak ditemukan di PATH',
           antigravityExecutable: findAntigravityExecutable({ home, env }),
-          note: 'Status dari disk + resolusi PATH. Handshake MCP tidak diuji. Reload config di Antigravity dilakukan manual atau dengan restart aplikasi.' });
+          verification:evidence(), note: 'Status dari disk + resolusi PATH. Handshake MCP tidak diuji oleh dashboard. Callback bridge terpisah; MCP lain tetap tidak diketahui.' });
       }
       if (req.url === '/api/antigravity/control') {
         if (!['status','close','launch','restart'].includes(input.action)) throw new AuthError(400, 'Aksi invalid.');
         const closing = input.action === 'close' || input.action === 'restart';
         if (closing && input.confirmClose !== true) throw new AuthError(400, 'Konfirmasi wajib: menutup Antigravity dapat menghilangkan pekerjaan yang belum disimpan.');
         const force = input.force === true;
+        // Force never escalates automatically: it needs its own explicit consent on top of confirmClose.
+        if (force && (!closing || input.confirmForce !== true)) throw new AuthError(400, 'Paksa tutup wajib konfirmasi terpisah (confirmForce) dan hanya untuk close/restart.');
+        // One verified executable for status/close/launch: never a sibling Antigravity product.
+        const executable = findAntigravityExecutable({ home, env });
+        if(!executable)throw new Error('Executable Antigravity IDE terverifikasi tidak ditemukan (atau ambigu); tidak ada proses dibuka/ditutup.');
+        const forceRequired = (e) => /^FORCE_REQUIRED:/.test(e.message || '');
         try {
-          if (input.action === 'status') return send(200, await controlRunner('status'));
-          if (input.action === 'close') return send(200, await controlRunner('close', { force }));
-          const executable = findAntigravityExecutable({ home, env });
-          if(!executable)throw new Error('Binary Antigravity tidak ditemukan; tidak ada proses ditutup.');
-          if (input.action === 'launch') return send(200, await controlRunner('launch', executable ? { executable } : {}));
-          const closed = await controlRunner('close', { force });
-          await new Promise(r => setTimeout(r, 1500));
-          if((await controlRunner('status')).running)throw new Error('Antigravity masih berjalan; tutup dibatalkan atau belum selesai. Peluncuran dibatalkan.');
-          return send(200, { closed, launched: await controlRunner('launch', executable ? { executable } : {}) });
-        } catch (e) { throw new AuthError(502, e.message); }
+          if (input.action === 'status') return send(200, await controlRunner('status', { executable }));
+          if (input.action === 'close') return send(200, await controlRunner('close', { force, executable }));
+          if (input.action === 'launch') return send(200, await controlRunner('launch', { executable }));
+          const closed = await controlRunner('close', { force, executable });
+          if((await controlRunner('status', { executable })).running)throw new Error('Antigravity IDE masih berjalan; tutup dibatalkan atau belum selesai. Peluncuran dibatalkan.');
+          return send(200, { closed, launched: await controlRunner('launch', { executable }) });
+        } catch (e) {
+          if (forceRequired(e)) return send(409, { error: e.message.replace(/^FORCE_REQUIRED:\s*/, ''), forceRequired: true, action: input.action,
+            warning: 'Paksa berhenti akan menutup Antigravity IDE tanpa menyimpan. Pekerjaan yang belum disimpan hilang permanen.' });
+          throw new AuthError(502, e.message);
+        }
       }
 
       if (!['/api/install', '/api/mcp'].includes(req.url)) return send(404, { error: 'Tidak ditemukan' });
@@ -378,6 +444,8 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
       send(status, { error: error.message || 'Terjadi kesalahan' });
     }
   });
+  server.on('close',()=>{if(verification)clearVerification();});
+  return server;
 }
 
 module.exports = { createDashboardServer };

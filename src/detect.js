@@ -52,20 +52,6 @@ function configBase(home, env) {
   return { dir: override ? path.resolve(override) : path.join(home, '.gemini', 'config'), overridden: Boolean(override) };
 }
 
-function appEvidence(home, env, platform) {
-  // User-requested cross-OS install candidates. Evidence only: none become write targets.
-  const dirs = platform === 'win32'
-    ? [path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Antigravity'),
-       path.join(env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Antigravity'),
-       path.join(env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Programs', 'Antigravity'),
-       path.join(env.PROGRAMFILES || 'C:\\Program Files', 'Antigravity'), path.join(home, '.antigravity')]
-    : platform === 'darwin'
-      ? ['/Applications/Antigravity.app', path.join(home, 'Applications', 'Antigravity.app'),
-         path.join(home, 'Library', 'Application Support', 'Antigravity'), path.join(home, '.antigravity')]
-      : ['/usr/share/antigravity', '/opt/antigravity', path.join(home, '.local', 'share', 'antigravity'),
-         path.join(home, '.config', 'Antigravity'), path.join(home, '.antigravity')];
-  return dirs.filter((d) => fs.existsSync(d));
-}
 
 function detectTargets({ home = os.homedir(), cwd = process.cwd(), env = process.env, platform = process.platform } = {}) {
   const base = configBase(home, env);
@@ -76,7 +62,6 @@ function detectTargets({ home = os.homedir(), cwd = process.cwd(), env = process
     { dir: path.join(cwd, '.agents', 'skills'), scope: 'project', documented: true, note: 'workspace default (.agents/skills)' },
     { dir: path.join(cwd, '.agent', 'skills'), scope: 'project', documented: true, note: 'workspace back-compat (.agent/skills)' },
     { dir: path.join(base.dir, 'skills'), scope: 'global', documented: true, note: base.overridden ? 'global skills via env override' : 'global skills (~/.gemini/config/skills)' },
-    ...(!base.overridden ? ['antigravity', 'antigravity-cli'].map(surface => ({ dir: path.join(home, '.gemini', surface, 'skills'), scope: 'global', documented: true, note: `skills ${surface} (surface-specific)` })) : []),
   ];
   for (const s of skillsDirs) {
     const exists = fs.existsSync(s.dir);
@@ -121,7 +106,8 @@ function detectTargets({ home = os.homedir(), cwd = process.cwd(), env = process
     if (c.kind === 'skills' && c.skillCount > 0) configEvidence.push(`${c.dir} berisi ${c.skillCount} SKILL.md`);
   }
   if (fs.existsSync(oauthTokens)) configEvidence.push('~/.gemini/antigravity/mcp_oauth_tokens.json ada (Antigravity pernah dipakai)');
-  const appDirs = appEvidence(home, env, platform);
+  const ideExecutable = findAntigravityExecutable({ home, env, platform });
+  const appDirs = ideExecutable ? [ideExecutable] : [];
 
   return {
     platform, home, cwd,
@@ -160,6 +146,7 @@ function validateCustomTargets(input, { cwd = process.cwd(), platform = process.
     const root = path.parse(abs).root;
     if (abs === root) throw new Error(`${kind}: root filesystem/drive ditolak.`);
     const norm = abs.replace(/\\/g, '/').toLowerCase();
+    if (/(?:^|\/)\.gemini\/antigravity-ide(?:\/|$)/.test(norm)) throw new Error(`${kind}: folder app-owned antigravity-ide (runtime/builtin/plugin/cache) ditolak.`);
     const dangerous = platform === 'win32'
       ? ['/windows/', '/program files/', '/program files (x86)/', '/node_modules/']
       : ['/etc/', '/usr/', '/bin/', '/sbin/', '/var/', '/node_modules/'];
@@ -234,9 +221,23 @@ function resolveForWrite(scope, opts = {}) {
   return r;
 }
 
-function findAntigravityExecutable({home=os.homedir(),env=process.env,platform=process.platform}={}) {
-  const candidates=appEvidence(home,env,platform).map(d=>path.join(d,platform==='win32'?'Antigravity.exe':platform==='darwin'?'Contents/MacOS/Antigravity':'antigravity'));
-  return candidates.find(f=>{try{return fs.statSync(f).isFile()}catch{return false}})||null;
+function ideProduct(executable, platform) {
+  const root=platform==='darwin'?path.resolve(executable,'../../..'):path.dirname(executable);
+  const product=path.join(root,'resources','app','product.json');
+  try {
+    const p=JSON.parse(fs.readFileSync(product,'utf8'));
+    const names=[p.nameShort,p.nameLong,p.applicationName,p.win32NameVersion].filter(x=>typeof x==='string').map(x=>x.toLowerCase());
+    return names.includes('antigravity ide')&&names.includes('antigravity-ide');
+  } catch { return false; }
 }
-module.exports = { detectTargets, validateCustomTargets, resolveTargets, resolveForWrite, findAntigravityExecutable };
+function findAntigravityExecutable({home=os.homedir(),env=process.env,platform=process.platform}={}) {
+  const exe=platform==='win32'?'Antigravity IDE.exe':platform==='darwin'?'Contents/MacOS/Antigravity IDE':'antigravity-ide';
+  const roots=platform==='win32'
+    ? [path.join(env.LOCALAPPDATA||path.join(home,'AppData','Local'),'Programs','Antigravity IDE'),path.join(env.PROGRAMFILES||'C:\\Program Files','Antigravity IDE'),path.join(env['PROGRAMFILES(X86)']||'C:\\Program Files (x86)','Antigravity IDE')]
+    : platform==='darwin' ? ['/Applications/Antigravity IDE.app',path.join(home,'Applications','Antigravity IDE.app')]
+      : ['/usr/share/antigravity-ide','/opt/antigravity-ide',path.join(home,'.local','share','antigravity-ide')];
+  const verified=[...new Set(roots.map(d=>path.join(d,exe)).filter(f=>{try{return fs.statSync(f).isFile()&&ideProduct(f,platform)}catch{return false}}))];
+  return verified.length===1?verified[0]:null;
+}
+module.exports = { detectTargets, validateCustomTargets, resolveTargets, resolveForWrite, findAntigravityExecutable, ideProduct };
 if(require.main===module)process.stdout.write(JSON.stringify({executable:findAntigravityExecutable()}));

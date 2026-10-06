@@ -159,7 +159,7 @@ test('dashboard catalog exposes registry mcp entries and installs them by id (au
 
   const { createDashboardServer } = require('../src/dashboard');
   const cwd = path.join(tmp, 'ws');
-  const server = createDashboardServer({ cwd, apiUrl: `http://127.0.0.1:${remote.address().port}/api` });
+  const server = createDashboardServer({ cwd, home: cwd, apiUrl: `http://127.0.0.1:${remote.address().port}/api` });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const post = (url, body) => fetch(base + url, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify(body) });
@@ -177,14 +177,14 @@ test('dashboard catalog exposes registry mcp entries and installs them by id (au
     assert.deepEqual(catalog.mcpServers.map((m) => m.id), ['santri-skills', 'cms']);
     assert.ok(!JSON.stringify(catalog.mcpServers).includes('npx'), 'command tidak dibocorkan ke browser');
 
-    assert.equal((await post('/api/mcp', { scope: 'project', id: 'cms', confirm: true, _csrf: csrf })).status, 200);
-    const cfg = JSON.parse(fs.readFileSync(path.join(cwd, '.agents', 'mcp_config.json'), 'utf8'));
+    assert.equal((await post('/api/mcp', { scope: 'global', confirmGlobal: true, id: 'cms', confirm: true, _csrf: csrf })).status, 200);
+    const cfg = JSON.parse(fs.readFileSync(path.join(cwd, '.gemini', 'config', 'mcp_config.json'), 'utf8'));
     assert.deepEqual(cfg.mcpServers.cms, { command: 'npx', args: ['-y', 'santriverse-cms-mcp'] });
 
     assert.equal((await post('/api/mcp', { scope: 'project', id: 'unknown', confirm: true, _csrf: csrf })).status, 400);
     assert.equal((await post('/api/mcp', { scope: 'project', id: 'cms', _csrf: csrf })).status, 400);
     // A write without the per-page CSRF token is refused even while signed in.
-    assert.equal((await post('/api/mcp', { scope: 'project', id: 'cms', confirm: true })).status, 403);
+    assert.equal((await post('/api/mcp', { scope: 'global', confirmGlobal: true, id: 'cms', confirm: true })).status, 403);
     // Global scope needs an explicit confirmation flag.
     assert.equal((await post('/api/mcp', { scope: 'global', id: 'cms', confirm: true, _csrf: csrf })).status, 400);
   } finally {

@@ -1,6 +1,6 @@
 'use strict';
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],show=(el,v=true)=>{el.hidden=!v};
-const PAGES={home:'Home',skills:'Skills',mcp:'MCP Servers',status:'Status Config',repos:'Repositories',terminal:'Terminal Instalasi',activity:'Activity'};
+const PAGES={home:'Home',skills:'Skills',mcp:'MCP Servers',status:'Status Config',repos:'Repositories',activity:'Activity'};
 let catalog={skills:[],mcpServers:[]},csrf='',repoCache=null,lastStatus=null;
 const selectedSkills=new Set();
 const activity=[]; // ponytail: session-only memory log; persist server-side if audit history is needed.
@@ -8,12 +8,12 @@ const activity=[]; // ponytail: session-only memory log; persist server-side if 
 function status(t,err=false){if($('#locked').open)$('#gate-feedback').textContent=err?t:'';const el=$('#status');el.textContent=t;el.className='save-toast '+(err?'error':t.startsWith('✓')?'success':'')}
 function log(t,err=false){activity.unshift({t,err,at:new Date()});renderActivity()}
 function done(t){status(t);log(t)}function fail(e){status(e.message,true);log(e.message,true)}
-const scope=()=>$('input[name=scope]:checked').value;
+const scope=()=> 'global';
 function esc(s){const d=document.createElement('span');d.textContent=s==null?'':String(s);return d.innerHTML}
 
 async function post(url,body={}){
   const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,_csrf:csrf})});
-  const data=await res.json();if(!res.ok)throw new Error(data.error||'Gagal');return data}
+  const data=await res.json();if(!res.ok)throw Object.assign(new Error(data.error||'Gagal'),{forceRequired:data.forceRequired===true});return data}
 async function getJson(url){const res=await fetch(url);const data=await res.json();if(!res.ok)throw new Error(data.error||'Gagal');return data}
 async function busy(btn,msg,fn){btn.disabled=true;show($('#progress'));status(msg);try{await fn()}catch(e){fail(e)}finally{btn.disabled=false;show($('#progress'),false)}}
 const confirmGlobal=what=>scope()!=='global'||confirm(`${what} ke scope GLOBAL: semua project terdampak. Lanjutkan?`);
@@ -63,18 +63,19 @@ function showMember(u){const name=(u&&u.name)||'Member',email=(u&&u.email)||'Pre
   $('#avatar').textContent=initial;$('#menu-avatar').textContent=initial;$('.rail-avatar').textContent=initial;
   typewriter($('#home-greeting'),[`Selamat datang, ${name.split(' ')[0]}.`,`Siap memasang skill, ${name.split(' ')[0]}?`,'Skills + MCP untuk Antigravity.']);
   show($('#account'));$('#locked').close();document.body.classList.remove('auth-locked');show($('#content'));syncFx(location.hash.slice(1)||'home');status('Premium aktif. Katalog siap.')}
-function showLocked(){resetGithub();show($('#check-panel'),false);resetLocalSkills();resetLocalMcp();termOut().textContent='Login diperlukan.';csrf='';lastStatus=null;selectedSkills.clear();activity.length=0;repoCache=null;catalog={skills:[],mcpServers:[]};renderActivity();closeProfile();document.body.classList.add('auth-locked');if(!$('#locked').open)$('#locked').showModal();show($('#account'),false);show($('#content'));syncFx('');status('Login untuk mengakses katalog premium.')}
+function closeCheck(){for(const id of ['#restart-confirm','#force-confirm']){const d=$(id);d.returnValue='cancel';if(d.open)d.close()}if($('#check-panel').open)$('#check-panel').close()}
+function showLocked(){resetGithub();closeCheck();resetLocalSkills();resetLocalMcp();csrf='';lastStatus=null;selectedSkills.clear();activity.length=0;repoCache=null;catalog={skills:[],mcpServers:[]};renderActivity();closeProfile();document.body.classList.add('auth-locked');if(!$('#locked').open)$('#locked').showModal();show($('#account'),false);show($('#content'));syncFx('');status('Login untuk mengakses katalog premium.')}
 $('#locked').addEventListener('cancel',e=>e.preventDefault());
 document.body.classList.add('auth-locked');$('#locked').showModal();
 $('#login').onclick=()=>busy($('#login'),'Membuka login…',async()=>{const{url}=await post('/api/auth/login');location.href=url});
 $('#logout').onclick=()=>busy($('#logout'),'Logout…',async()=>{await post('/api/auth/logout');showLocked();status('Berhasil logout.')});
-$$('input[name=scope]').forEach(r=>r.onchange=()=>{resetGithub();show($('#check-panel'),false);resetLocalSkills();resetLocalMcp();repoCache=null;log('Scope diubah ke '+scope()+'.');loadStatus();loadTargets()});
+$$('input[name=scope]').forEach(r=>r.onchange=()=>{resetGithub();closeCheck();resetLocalSkills();resetLocalMcp();repoCache=null;log('Scope diubah ke '+scope()+'.');loadStatus();loadTargets()});
 
 // ─ Skills ─
 function item(tag,html,ctrl){const el=document.createElement(tag);el.className='item';const d=document.createElement('div');d.innerHTML=html;ctrl&&el.append(ctrl);el.append(d);return el}
-function renderSkills(){const q=$('#search').value.toLowerCase(),installed=new Set((lastStatus&&lastStatus.skills||[]).map(s=>s.id));
+function renderSkills(){const q=$('#search').value.toLowerCase(),installed=new Set((lastStatus&&lastStatus.scope===scope()&&lastStatus.skills||[]).map(s=>s.id));
   const rows=catalog.skills.filter(s=>`${s.id} ${s.description} ${s.source}`.toLowerCase().includes(q));
-  $('#skills').replaceChildren(...rows.map(s=>item('label',`<strong>${esc(s.id)}</strong>${installed.has(s.id)?'<span class="pill ok">TERPASANG</span>':''}<small>${esc(s.source)}</small><span class="muted">${esc(s.description)}</span>`,Object.assign(document.createElement('input'),{type:'checkbox',value:s.id,checked:selectedSkills.has(s.id),onchange:e=>e.target.checked?selectedSkills.add(s.id):selectedSkills.delete(s.id)}))));
+  $('#skills').replaceChildren(...rows.map(s=>item('label',`<strong>${esc(s.id)}</strong>${installed.has(s.id)?'<span class="pill ok">TERPASANG · '+esc(lastStatus.scope.toUpperCase())+'</span>':'<span class="pill">BELUM TERPASANG · '+esc(scope().toUpperCase())+'</span>'}<small>${esc(s.source)}</small><span class="muted">${esc(s.description)}</span>`,Object.assign(document.createElement('input'),{type:'checkbox',value:s.id,checked:selectedSkills.has(s.id),onchange:e=>e.target.checked?selectedSkills.add(s.id):selectedSkills.delete(s.id)}))));
   if(!rows.length)$('#skills').textContent='Skill tidak ditemukan.'}
 $('#search').addEventListener('input',renderSkills);
 $('#side-search').addEventListener('input',e=>{$('#search').value=e.target.value;go('skills');renderSkills()});
@@ -84,19 +85,19 @@ $('#install-skills').onclick=()=>{const ids=[...selectedSkills];if(!ids.length)r
   busy($('#install-skills'),'Menginstal skill…',async()=>{const r=await post('/api/install',{scope:scope(),skillIds:ids,confirmGlobal:scope()==='global'});done(`✓ ${r.installed} salinan terpasang, ${r.skipped} dilewati (${scope()}). Reload Antigravity.`);await loadStatus()})};
 
 // ─ MCP ─
-function renderMcp(){const conf=new Set((lastStatus&&lastStatus.mcp.servers||[]).map(s=>s.name));
+function renderMcp(){const conf=new Set((lastStatus&&lastStatus.scope===scope()&&lastStatus.mcp.servers||[]).map(s=>s.name));
   $('#mcp').replaceChildren(...catalog.mcpServers.map(m=>{const b=Object.assign(document.createElement('button'),{type:'button',textContent:'Daftarkan',className:'secondary'});
   b.onclick=()=>{if(!confirmGlobal('Daftarkan MCP '+m.id))return;busy(b,'Mendaftarkan MCP…',async()=>{const r=await post('/api/mcp',{scope:scope(),id:m.id,confirm:true,confirmGlobal:scope()==='global'});
     const diff=$('#mcp-diff');if(diff){diff.innerHTML=`<strong>Perubahan mcp_config.json</strong><div>${esc(r.config)}</div><small>Ditambahkan: ${esc((r.added||[]).join(', ')||'—')}${r.updated&&r.updated.length?' · diperbarui: '+esc(r.updated.join(', ')):''} · total server: ${esc(String((r.servers||[]).length))}${r.backup?' · backup: '+esc(r.backup):' · file baru, tanpa backup'}</small>`;show(diff)}
     done('✓ '+r.message);await loadStatus();await loadTargets()})};
-  const el=item('div',`<strong>${esc(m.label||m.id)}</strong>${conf.has(m.id)?'<span class="pill ok">CONFIGURED</span>':''}<small>${esc(m.id)} · runtime belum diverifikasi</small><span class="muted">${esc(m.description)}</span>`);el.append(b);return el}));
+  const el=item('div',`<strong>${esc(m.label||m.id)}</strong>${conf.has(m.builtin?'santri-skills':m.id)?'<span class="pill ok">CONFIG ADA · '+esc(lastStatus.scope.toUpperCase())+'</span>':'<span class="pill">BELUM TERPASANG · '+esc(scope().toUpperCase())+'</span>'}<small>${esc(m.id)} · runtime belum diverifikasi</small><span class="muted">${esc(m.description)}</span>`);el.append(b);return el}));
   if(!catalog.mcpServers.length)$('#mcp').textContent='Tidak ada MCP di katalog.'}
 
 // ─ Status Config (read from disk by server) ─
 async function loadStatus(){if(!csrf)return;const requestedScope=scope();lastStatus=null;$('#stat-installed').textContent='—';$('#stat-config').textContent='Memeriksa config';$('#install-counts').innerHTML='<span>Skills <b>—</b></span><span>MCP <b>—</b></span>';$('#status-view').innerHTML='<div class="installation-column">Membaca Skills…</div><div class="installation-column">Membaca MCP…</div>';renderSkills();renderMcp();try{const result=await getJson('/api/status?scope='+encodeURIComponent(requestedScope));if(scope()!==requestedScope)return;lastStatus=result;renderStatus();return true}catch(e){$('#stat-config').textContent='Tidak diketahui';$('#status-view').innerHTML='<div class="installation-column error-state">Status tidak tersedia. Coba periksa ulang.</div>';fail(e);return false}}
 function renderStatus(){const s=lastStatus;if(!s)return;const m=s.mcp,skillCount=s.skills.length,mcpCount=m.servers.length;
   const missingSkills=new Set(catalog.skills.filter(k=>!s.skills.some(x=>x.id===k.id)).map(k=>k.id)).size,missingMcp=catalog.mcpServers.filter(k=>!m.servers.some(x=>x.name===k.id)).length;
-  const skillState=skillCount?`TERPASANG · ${skillCount}`:'BELUM TERPASANG';
+  const skillState=skillCount?`TERPASANG · ${s.scope.toUpperCase()} · ${skillCount}`:'BELUM TERPASANG';
   const mcpState=m.valid===false?'JSON RUSAK':mcpCount?`DIKONFIGURASI · ${mcpCount}`:m.exists?'BELUM DIKONFIGURASI':'FILE BELUM ADA';
   const column=(kind,label,tone,paths,items,help)=>`<article class="installation-column"><div class="installation-title"><span>${kind}</span><span class="pill ${tone}">${label}</span></div><div class="install-paths">${paths}</div>${items?`<ul>${items}</ul>`:''}<p>${help}</p></article>`;
   $('#status-view').innerHTML=
@@ -129,13 +130,27 @@ async function previewGithubUi(url){resetGithub();const generation=githubGenerat
 $('#preview-repo').onclick=()=>busy($('#preview-repo'),'Membaca GitHub…',()=>previewGithubUi($('#repo-url').value.trim()));
 async function installGithubUi(skillIds,mcpNames){const p=repoCache;if(!p||p.scope!==scope())throw new Error('Preview ulang pada scope aktif.');if(!skillIds.length&&!mcpNames.length)throw new Error('Pilih minimal satu item.');if(!confirm(`Install ${skillIds.join(', ')} ${mcpNames.join(', ')} pada scope ${p.scope}? Config MCP dapat dijalankan oleh Antigravity setelah reload. Hanya pilih repo yang dipercaya.`))return;if(!confirmGlobal('Install repo'))return;
  const r=await post('/api/github/install',{previewId:p.previewId,previewHash:p.previewHash,sourceUrl:p.sourceUrl,scope:p.scope,skillIds,mcpNames,confirm:true,confirmGlobal:p.scope==='global'});resetGithub();
- const report=[r.skills?`${r.skills.installed} SKILL.md ditulis.`:'',...(r.mcp?r.mcp.added.map(s=>`${s.name}: ${s.config}; runtime ${s.runtime}. ${s.note}`):[]),r.warning||'',r.installCommands.length?'Perintah README (TEKS SAJA): '+r.installCommands.join(' | '):'Perintah install tidak ditemukan; baca README repo.'].filter(Boolean).join('\n');$('#repo-installed').textContent=report;termWrite(report);status(r.partial?'Config ditulis; runtime belum siap.':'File ditulis; koneksi MCP belum diuji.',!!r.partial);await loadStatus();return r;
+ const report=[r.skills?`${r.skills.installed} SKILL.md ditulis.`:'',...(r.mcp?r.mcp.added.map(s=>`${s.name}: ${s.config}; runtime ${s.runtime}. ${s.note}`):[]),r.warning||'',r.installCommands.length?'Perintah README (TEKS SAJA): '+r.installCommands.join(' | '):'Perintah install tidak ditemukan; baca README repo.'].filter(Boolean).join('\n');$('#repo-installed').textContent=report;status(r.partial?'Config ditulis; runtime belum siap.':'File ditulis; koneksi MCP belum diuji.',!!r.partial);await loadStatus();return r;
 }
 $('#install-repo').onclick=()=>busy($('#install-repo'),'Menulis pilihan…',()=>installGithubUi($$('#repo-results input:checked').filter(x=>x.dataset.kind==='skill').map(x=>x.value),$$('#repo-results input:checked').filter(x=>x.dataset.kind==='mcp').map(x=>x.value)));
-$('#check-test').onclick=()=>busy($('#check-test'),'Memeriksa disk dan PATH…',async()=>{const wanted=scope();const r=await post('/api/verify',{scope:wanted});if(scope()!==wanted)return;show($('#check-panel'));$('#check-summary').textContent=r.note+' Python: '+r.python;const row=(name,pass,note)=>`<li><strong>${pass===true?'LULUS':pass===false?'GAGAL':'BELUM DIUJI'} — ${esc(name)}</strong><small>${esc(note)}</small></li>`;$('#check-results').innerHTML=`<article class="installation-column"><h3>Skills</h3><ul>${r.skills.length?r.skills.map(s=>row(s.id,true,s.dir+'/SKILL.md')).join(''):row('Skills',false,'SKILL.md belum ditemukan.')}</ul></article><article class="installation-column"><h3>MCP</h3><ul>${row('Config',r.mcp.exists&&r.mcp.valid,r.mcp.configFile)}${r.mcp.servers.map(s=>row(s.name,s.available,s.runtime+' — '+(s.note||''))).join('')}</ul></article>`;$('#check-panel').scrollIntoView({behavior:'smooth'});});
-$('#open-antigravity').onclick=()=>busy($('#open-antigravity'),'Membuka Antigravity…',async()=>{await post('/api/antigravity/control',{action:'launch'});done('Permintaan buka dikirim; periksa Antigravity.')});
+$('#check-test').onclick=()=>busy($('#check-test'),'Memeriksa disk dan PATH…',async()=>{const wanted=scope(),dlg=$('#check-panel');$('#check-summary').textContent='Memeriksa scope '+wanted+'…';$('#check-results').innerHTML='';$('#check-targets').textContent='';$('#check-counts').textContent='';show($('#force-antigravity'),false);$('#control-feedback').textContent='';dlg.showModal();let r;try{r=await post('/api/verify',{scope:wanted,skillIds:[...selectedSkills]})}catch(e){$('#check-summary').textContent='Pemeriksaan gagal: '+e.message;throw e}if(scope()!==wanted)return closeCheck();renderCheck(r);});
+function renderCheck(r){
+ const skillRows=r.skillChecks||r.skills.map(s=>({...s,exists:true,path:s.dir+'/SKILL.md'})),mcpRows=r.mcpChecks||r.mcp.servers;
+ const skillCount=skillRows.filter(s=>s.exists).length,configCount=mcpRows.filter(s=>s.configured).length;
+ $('#check-summary').textContent=`${r.scope==='global'?'Global semua workspace':'Project saat ini'} · IDE BELUM TERVERIFIKASI · Python ${r.python}. ${r.note}`;
+ $('#check-targets').innerHTML=`<strong>Target aktif · ${esc(r.scope.toUpperCase())}</strong>${r.skillTargets.map(s=>`<code>Skills: ${esc(s.dir)}/&lt;id&gt;/SKILL.md</code>`).join('')}<code>MCP: ${esc(r.mcp.configFile)}</code><p>${r.scope==='project'?`Hanya dimuat ketika workspace ${esc(r.workspace)} dibuka di IDE. Bukan semua workspace.`:'Global Antigravity Library · semua workspace. santri-skills hanya muncul jika terpasang pada scope Global; salinan .agents Project tidak masuk daftar global IDE.'}</p>`;
+ $('#check-counts').innerHTML=`<span>Skills <b>${skillCount} file ada · ${skillRows.length-skillCount} belum terpasang</b></span><span>MCP <b>${configCount} config ada · ${mcpRows.length-configCount} belum terpasang</b></span><span>IDE <b>0 terverifikasi</b></span>`;
+ const pill=(text,ok=false)=>`<span class="pill ${ok?'ok':''}">${text}</span>`;
+ const row=(name,badges,note)=>`<li><strong>${esc(name)}</strong><div>${badges}${pill('IDE BELUM TERVERIFIKASI')}</div><small>${esc(note)}</small></li>`;
+ $('#check-results').innerHTML=`<article class="installation-column"><h3>Skills · ${skillRows.length}</h3><ul>${skillRows.map(s=>row(s.id,pill(s.exists?'FILE ADA':'BELUM TERPASANG',s.exists),s.path)).join('')||'<li>Tidak ada kandidat Skills.</li>'}</ul></article><article class="installation-column"><h3>MCP · ${mcpRows.length}</h3><p>${pill(r.mcp.valid===false?'JSON RUSAK':r.mcp.exists?'CONFIG ADA':'CONFIG BELUM ADA',r.mcp.exists&&r.mcp.valid)}</p><ul>${mcpRows.map(s=>row(s.name,pill(s.configured?'CONFIG ADA':'BELUM TERPASANG',s.configured)+pill(!s.configured?'RUNTIME BELUM DIUJI':s.available===true?'RUNTIME SIAP':s.available===false||s.launcherAvailable===false?'RUNTIME HILANG':'RUNTIME BELUM DIUJI',s.configured&&s.available===true),(s.kind?`${s.kind} · `:'')+(s.runtime||'')+' · '+(s.note||'Config dan PATH tidak membuktikan koneksi IDE.'))).join('')||'<li>Tidak ada kandidat MCP.</li>'}</ul></article>`;
+}
+$('#close-check').onclick=closeCheck;
+$('#open-antigravity').onclick=()=>busy($('#open-antigravity'),'Membuka Antigravity IDE…',async()=>{await post('/api/antigravity/control',{action:'launch'});$('#control-feedback').textContent='Permintaan buka berhasil.';done('Permintaan buka dikirim; periksa Antigravity IDE.')});
 $('#restart-antigravity').onclick=()=>{$('#restart-confirm').returnValue='cancel';$('#restart-confirm').showModal()};
-$('#restart-confirm').addEventListener('close',()=>{if($('#restart-confirm').returnValue!=='confirm')return;busy($('#restart-antigravity'),'Meminta restart Antigravity…',async()=>{await post('/api/antigravity/control',{action:'restart',confirmClose:true,force:false});done('Permintaan restart selesai; periksa Antigravity.');})});
+async function restartIde(force){const button=force?$('#force-antigravity'):$('#restart-antigravity');await busy(button,force?'Memaksa restart Antigravity IDE…':'Meminta restart Antigravity IDE…',async()=>{try{await post('/api/antigravity/control',{action:'restart',confirmClose:true,force,confirmForce:force});show($('#force-antigravity'),false);$('#control-feedback').textContent='Restart selesai. Verifikasi runtime dengan memanggil santrihub_status di chat IDE.';done('Restart selesai; verifikasi tool MCP di IDE.')}catch(e){if(!force&&e.forceRequired){show($('#force-antigravity'));$('#control-feedback').textContent=e.message+' Paksa restart tersedia hanya setelah kegagalan graceful.';}throw e}})}
+$('#restart-confirm').addEventListener('close',()=>{if($('#restart-confirm').returnValue==='confirm')restartIde(false)});
+$('#force-antigravity').onclick=()=>{$('#force-confirm').returnValue='cancel';$('#force-confirm').showModal()};
+$('#force-confirm').addEventListener('close',()=>{if($('#force-confirm').returnValue==='confirm')restartIde(true)});
 
 // ─ Activity ─
 function renderActivity(){$('#activity-log').innerHTML=activity.length?activity.map(a=>`<li class="${a.err?'error':''}"><time>${a.at.toLocaleTimeString()}</time> ${esc(a.t)}</li>`).join(''):'<li class="muted">Belum ada aktivitas di sesi ini.</li>'}
@@ -152,7 +167,7 @@ function syncFx(page){if(!agFx)return;page==='home'&&!$('#locked').open&&!$('#co
 // ─ Targets: detection, effective paths, custom override ─
 let targets=null;
 const pathRow=(label,value,extra='')=>`<div class="target-row"><strong>${esc(label)}</strong><div>${esc(value)}</div>${extra}</div>`;
-async function loadTargets(){if(!csrf)return;try{targets=await getJson('/api/targets?scope='+encodeURIComponent(scope()));renderTargets();localTargetNote()}catch(e){$('#target-detection').textContent='Deteksi gagal: '+e.message}}
+async function loadTargets(){if(!csrf)return;const wanted=scope();try{const result=await getJson('/api/targets?scope='+encodeURIComponent(wanted));if(scope()!==wanted)return;targets=result;renderTargets();localTargetNote()}catch(e){$('#target-detection').textContent='Deteksi gagal: '+e.message}}
 function renderTargets(){const d=targets;if(!d)return;
   const badge=$('#target-badge');
   badge.textContent=d.antigravityDetected?'TERDETEKSI':'TIDAK TERDETEKSI';
@@ -161,6 +176,8 @@ function renderTargets(){const d=targets;if(!d)return;
   const cfg=d.configEvidence.length?('Bukti konfigurasi: '+d.configEvidence.join(' · ')):'Tidak ada bukti konfigurasi Antigravity di luar repo ini.';
   $('#target-detection').textContent=`${cfg} ${app}${d.envOverride?' Override env aktif: '+d.envOverride+'.':''}`;
   const eff=d.effective[scope()];
+  $('#scope-destinations').textContent=`Skills: ${eff.skillsDirs.join(' | ')}/<id>/SKILL.md · MCP: ${eff.mcpFile}`;
+  $('#scope-warning').textContent=scope()==='project'?`Hanya dimuat ketika workspace ${d.cwd} dibuka di IDE. Bukan semua workspace.`:'Global Antigravity Library: tersedia untuk semua workspace; discovery IDE belum diverifikasi.';
   $('#target-effective').innerHTML=
     pathRow('Skills ('+scope()+')',eff.skillsDirs.join('  |  '))+
     pathRow('MCP config ('+scope()+')',eff.mcpFile)+
@@ -214,64 +231,6 @@ $('#preview-local-mcp').onclick=()=>{const src=$('#local-mcp-source').value.trim
 $('#install-local-mcp').onclick=()=>{const names=$$('#local-mcp-results input:checked').map(x=>x.value);if(!names.length)return status('Pilih minimal satu MCP.',true);
   if(!confirm(`Daftarkan ${names.join(', ')} ke mcp_config.json (${localMcpPreview.scope})? Antigravity bisa menjalankannya setelah reload.`))return;
   busy($('#install-local-mcp'),'Menggabungkan mcp_config.json…',async()=>{const r=await installLocalMcp(names);done('✓ '+r.message)})};
-
-// ─ Terminal Instalasi: parser perintah terbatas, bukan shell OS ─
-const TERMINAL_HELP=['Terminal Instalasi — konsol terbatas, BUKAN CMD/PowerShell/shell OS.','Tidak ada eksekusi script repo atau command MCP. Semua lewat API premium yang sama dengan tombol UI.','',
- 'help                                  daftar perintah',
- 'status                                baca status scope aktif dari disk',
- 'scope                                 tampilkan scope + target instalasi efektif',
- 'clear                                 bersihkan output konsol',
- 'repo preview <url> [branch]           scan SKILL.md repo GitHub HTTPS',
- 'repo install <id[,id]>                install dari hasil repo preview terakhir',
- 'local skills preview <path-absolut>   scan folder skills lokal',
- 'local skills install <id[,id]|all>    salin dari hasil preview lokal terakhir',
- 'local mcp preview <path-absolut>      baca nama server mcp_config.json lokal',
- 'local mcp install <nama[,nama]>       gabungkan ke mcp_config.json target',
- 'mcp install <id>                      daftarkan MCP dari katalog premium'].join('\n');
-const termOut=()=>$('#terminal-output');
-function termWrite(text){const el=termOut();el.textContent=(el.textContent+'\n'+text).slice(-50000);el.scrollTop=el.scrollHeight}
-const quoted=s=>s.replace(/^"(.*)"$/,'$1').replace(/^'(.*)'$/,'$1');
-const idList=raw=>raw.split(',').map(x=>x.trim()).filter(Boolean);
-async function runTerminal(line){
-  const raw=line.trim();if(!raw)return;if(raw.length>4096||/[;&|`$<>\r\n]/.test(raw))throw new Error('Sintaks shell tidak didukung. Ketik help.');
-  if(/^https:\/\//i.test(raw)&&! /\s/.test(raw)){await previewGithubUi(raw);return termWrite('Preview GitHub tersedia di Repositories. Pilih item lalu Install pilihan; belum ada file ditulis.');}
-  const parts=raw.split(/\s+/),cmd=parts[0].toLowerCase();
-  if(['help','clear','scope','status'].includes(cmd)&&parts.length!==1)throw new Error('Argumen tidak didukung.');
-  if(cmd==='repo'&&parts[1]==='preview'&&parts.length>4||cmd==='mcp'&&parts[1]==='install'&&parts.length!==3)throw new Error('Argumen tidak didukung.');
-  if(cmd==='help')return termWrite(TERMINAL_HELP);
-  if(cmd==='clear')return void(termOut().textContent='Terminal Instalasi siap. Ketik help.');
-  if(cmd==='scope'){const eff=targets&&targets.effective&&targets.effective[scope()];
-    return termWrite(`scope=${scope()}\nskills -> ${eff?eff.skillsDirs.join(', ')||'tidak terdeteksi':'belum dimuat'}\nmcp    -> ${eff?eff.mcpFile||'tidak terdeteksi':'belum dimuat'}`)}
-  if(cmd==='status'){const ok=await loadStatus();if(!ok||!lastStatus)throw new Error('Status tidak tersedia.');
-    return termWrite(`scope=${lastStatus.scope}\nskills terpasang: ${lastStatus.skills.map(s=>s.id).join(', ')||'—'}\nmcp: ${lastStatus.mcp.configFile} (${lastStatus.mcp.valid===false?'JSON rusak':lastStatus.mcp.exists?'ada':'belum ada'}) server: ${lastStatus.mcp.servers.map(s=>s.name).join(', ')||'—'}\nruntime: ${lastStatus.runtime}`)}
-  if(cmd==='repo'&&parts[1]==='preview')return previewGithubUi(quoted(parts[2]||''));
-  if(cmd==='repo'&&parts[1]==='install')return installGithubUi(idList(parts.slice(2).join(' ')),[]);
-
-  if(cmd==='local'&&parts[1]==='skills'&&parts[2]==='preview'){const src=quoted(raw.replace(/^local\s+\S+\s+preview\s+/,''));if(!src)throw new Error('Pakai: local skills preview <path-absolut>');
-    $('#local-skills-source').value=src;const r=await previewLocalSkills(src,scope());
-    return termWrite(`sumber ${r.source} (scope ${r.scope}): ${r.skills.length} skill\n${r.skills.map(s=>`  ${s.id}  ${s.files} file  ${Math.ceil(s.bytes/1024)}KB  ${s.name}`).join('\n')}`)}
-  if(cmd==='local'&&parts[1]==='skills'&&parts[2]==='install'){if(!localSkillPreview)throw new Error('Jalankan local skills preview dulu.');
-    const arg=parts.slice(3).join(' ').trim();const ids=arg==='all'?localSkillPreview.skills.map(s=>s.id):idList(arg);if(!ids.length)throw new Error('Pakai: local skills install <id[,id]|all>');
-    if(localSkillPreview.scope==='global'&&!confirm('Install skill lokal ke scope GLOBAL. Lanjutkan?'))throw new Error('Dibatalkan.');
-    const r=await installLocalSkills(ids);return termWrite(`${r.installed} terpasang, ${r.skipped} dilewati -> ${r.targets.join(', ')}\nsumber ${r.source}. Reload Antigravity.`)}
-  if(cmd==='local'&&parts[1]==='mcp'&&parts[2]==='preview'){const src=quoted(raw.replace(/^local\s+\S+\s+preview\s+/,''));if(!src)throw new Error('Pakai: local mcp preview <path-absolut>');
-    $('#local-mcp-source').value=src;const r=await previewLocalMcp(src,scope());
-    return termWrite(`sumber ${r.source} (scope ${r.scope}): ${r.count} server\n${r.names.map(n=>'  '+n).join('\n')}\n${r.note}`)}
-  if(cmd==='local'&&parts[1]==='mcp'&&parts[2]==='install'){if(!localMcpPreview)throw new Error('Jalankan local mcp preview dulu.');
-    const names=idList(parts.slice(3).join(' '));if(!names.length)throw new Error('Pakai: local mcp install <nama[,nama]>');
-    if(!confirm(`Daftarkan ${names.join(', ')} ke mcp_config.json (${localMcpPreview.scope})?`))throw new Error('Dibatalkan.');
-    const r=await installLocalMcp(names);return termWrite(`${r.added.join(', ')} -> ${r.config}${r.backup?' (backup '+r.backup+')':''}\ntotal server: ${r.servers.length}. ${r.message}`)}
-  if(cmd==='mcp'&&parts[1]==='install'){const id=parts[2];if(!id)throw new Error('Pakai: mcp install <id>');
-    if(scope()==='global'&&!confirm('Daftarkan MCP katalog ke scope GLOBAL. Lanjutkan?'))throw new Error('Dibatalkan.');
-    const r=await post('/api/mcp',{scope:scope(),id,confirm:true,confirmGlobal:scope()==='global'});await loadStatus();await loadTargets();
-    return termWrite(`${r.message}\nconfig ${r.config} · ditambahkan: ${(r.added||[]).join(', ')||'—'} · total ${(r.servers||[]).length}`)}
-  if(['cmd','powershell','bash','sh','cd','dir','ls','npm','node','git','rm','del','curl','exec','spawn'].includes(cmd))
-    throw new Error(`'${cmd}' tidak didukung: ini Terminal Instalasi (konsol terbatas), bukan shell OS. Ketik help.`);
-  throw new Error(`Perintah '${raw.slice(0,60)}' tidak dikenal. Ketik help.`);
-}
-$('#terminal-form').addEventListener('submit',e=>{e.preventDefault();const input=$('#terminal-input'),line=input.value;if(!line.trim())return;
-  input.value='';termWrite('> '+line.trim());
-  busy($('#terminal-run'),'Menjalankan perintah instalasi…',async()=>{try{await runTerminal(line);log('terminal: '+line.trim().slice(0,80))}catch(err){termWrite('error: '+err.message);throw err}})});
 
 // ─ Catalog ─
 async function loadCatalog(){show($('#progress'));status('Memuat katalog…');

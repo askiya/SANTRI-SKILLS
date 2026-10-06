@@ -1,7 +1,7 @@
 'use strict';
 
 // Minimal MCP stdio server (JSON-RPC 2.0, protocol 2024-11-05).
-// Tools: list_skills, get_skill, search_docs. Reads from the local cache populated by `install`/`update`.
+// Tools: santrihub_status, list_skills, get_skill, search_docs. No dashboard heartbeat or fake connection marker.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -10,8 +10,14 @@ const { REGISTRY, loadCatalog, selectSources, CACHE_ROOT } = require('./sources'
 
 const PROTOCOL = '2024-11-05';
 const pkg = require('../package.json');
+const {report}=require('./verification-bridge');
 
 const TOOLS = [
+  {
+    name: 'santrihub_status',
+    description: 'Bukti read-only bahwa runtime MCP santri-skills ini benar-benar dimuat klien: identitas server, versi, protocol, executable Node, dan root instalasi. Tidak membaca config atau secret.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   {
     name: 'list_skills',
     description: 'Daftar semua skill Santriverse (Apps Script + Monorepo) beserta deskripsinya.',
@@ -58,6 +64,16 @@ function* walkMarkdown(dir) {
 }
 
 async function callTool(name, args = {}) {
+  if (name === 'santrihub_status') {
+    report('tool');
+    // Identity + install location only. No config values, env, tokens or file contents.
+    return JSON.stringify({
+      server: 'santri-skills', version: pkg.version, protocolVersion: PROTOCOL,
+      installationRoot: path.resolve(__dirname, '..'), nodeExecutable: process.execPath,
+      toolNames: TOOLS.map((t) => t.name), skillCacheRoot: CACHE_ROOT, cacheExists: fs.existsSync(CACHE_ROOT),
+      note: 'Proses bridge MCP aktif. Identitas IDE tidak diautentikasi; clientInfo bukan bukti identitas. Status tidak membuktikan MCP lain atau skill dimuat IDE.',
+    }, null, 2);
+  }
   const groups = await catalog();
   if (name === 'list_skills') {
     const rows = groups.flatMap((g) => g.skills.map((s) => `- [${s.source}] ${s.id}: ${s.description.slice(0, 180)}`));
@@ -116,6 +132,7 @@ function serve() {
     const { id, method, params } = msg;
     try {
       if (method === 'initialize') {
+        report('initialize');
         reply(id, {
           protocolVersion: PROTOCOL,
           capabilities: { tools: {} },

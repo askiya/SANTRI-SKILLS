@@ -6,7 +6,7 @@ function controlArgv(action,options={}){
  if(!['status','close','launch'].includes(action))throw new Error('Aksi Antigravity invalid.');
  if(options.force!==undefined&&typeof options.force!=='boolean')throw new Error('force wajib boolean.');
  const argv=[action];if(action==='close'&&options.force)argv.push('--force');
- if(action==='launch'&&options.executable){if(typeof options.executable!=='string'||/[\x00-\x1f]/.test(options.executable))throw new Error('Path executable invalid.');argv.push('--executable',options.executable)}
+ if(options.executable!==undefined){if(typeof options.executable!=='string'||/[\x00-\x1f]/.test(options.executable))throw new Error('Path executable invalid.');argv.push('--executable',options.executable)}
  return argv;
 }
 function pythonCommand(env=process.env){return resolveCommand(process.platform==='win32'?'python.exe':'python3',env)||resolveCommand('python',env)}

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { parseFrontmatter } = require('./sources');
+const { mcpKind } = require('./runtime-status');
 const MAX_SKILLS=100, MAX_DEPTH=6, MAX_NODES=2000, MAX_BYTES=8*1024*1024, MAX_FILE=512*1024;
 const denied = /^(?:\..*|node_modules|windows|program files(?: \(x86\))?|etc|usr|bin|sbin|proc|sys|dev|credentials?|secrets?|tokens?|passwords?|id_rsa|id_ed25519)$/i;
 const secret = /(?:credential|secret|token|password|passwd|id_rsa|id_ed25519)|\.(?:pem|key|pfx|p12|db|sqlite)$/i;
@@ -75,8 +76,7 @@ function mcpSnapshot(source){
   if(!obj(cfg)||!obj(cfg.mcpServers))throw new Error('mcp_config.json wajib object mcpServers.');
   const names=Object.keys(cfg.mcpServers).sort();if(!names.length||names.length>100)throw new Error('MCP wajib 1–100 entri.');
   for(const n of names){const e=cfg.mcpServers[n];if(!safeId(n)||!obj(e))throw new Error('Nama/entri MCP invalid.');
-    const command=typeof e.command==='string'&&e.command.trim(),url=typeof e.url==='string'&&/^https?:\/\//.test(e.url);
-    if(!command&&!url||e.args!=null&&(!Array.isArray(e.args)||e.args.some(a=>typeof a!=='string'))||e.env!=null&&!obj(e.env)||e.headers!=null&&!obj(e.headers))throw new Error('Bentuk entri MCP invalid.');
+    if(!mcpKind(e)||e.env!=null&&!obj(e.env)||e.headers!=null&&!obj(e.headers))throw new Error('Bentuk entri MCP invalid.');
   }
   return {source,names,entries:cfg.mcpServers,hash:crypto.createHash('sha256').update(raw).digest('hex')};
 }

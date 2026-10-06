@@ -24,7 +24,6 @@ test('target paths follow Antigravity docs', () => {
   assert.deepEqual(skillTargets('project', path.join(tmp, 'proj'), home), [path.join(tmp, 'proj', '.agents', 'skills')]);
   assert.deepEqual(skillTargets('global', path.join(tmp, 'proj'), home), [
     path.join(home, '.gemini', 'config', 'skills'),
-    path.join(home, '.gemini', 'antigravity-cli', 'skills'),
   ]);
   assert.equal(mcpConfigPath('project', path.join(tmp, 'proj'), home), path.join(tmp, 'proj', '.agents', 'mcp_config.json'));
 });
