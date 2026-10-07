@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Santriverse Skills" width="100%">
+  <img src="https://raw.githubusercontent.com/askiya/SANTRI-SKILLS/main/assets/banner.png" alt="Santriverse Skills" width="100%">
 </p>
 
 <h1 align="center">Santriverse Skills</h1>
@@ -119,6 +119,35 @@ Kontrak backend:
 - `GET /skills/session` memverifikasi token dan premium.
 - `DELETE /skills/session` mencabut sesi saat logout.
 - `GET /skills/catalog` mengembalikan `{success, sources, mcpServers}` yang lolos validator registry ketat.
+
+## SantriHub untuk Windows
+
+Aplikasi desktop untuk member: tanpa Node.js, tanpa Git, tanpa terminal.
+
+**Download:** [SantriHub-Setup.exe (versi terbaru)](https://github.com/askiya/SANTRI-SKILLS/releases/latest/download/SantriHub-Setup.exe) · [semua rilis](https://github.com/askiya/SANTRI-SKILLS/releases)
+
+- Windows 10/11 x64. Dipasang per-user di `%LOCALAPPDATA%\Programs\SantriHub` (tanpa hak administrator), shortcut Start Menu + opsional Desktop, uninstall dari Settings → Apps.
+- Jendelanya adalah dashboard yang sama di dalam Microsoft Edge mode aplikasi (bawaan Windows). Menutup jendela menghentikan server lokal; membuka SantriHub dua kali memakai instance yang sama.
+- **Login tetap wajib Member Premium Santriverse.** Verifikasi berjalan ke API Santriverse pada setiap aksi, persis seperti `dashboard`.
+- Installer belum ditandatangani sertifikat, jadi Windows SmartScreen dapat menampilkan peringatan: pilih **More info → Run anyway**. Cocokkan hash dengan `SHA256SUMS.txt` di halaman rilis.
+
+Dari terminal (Node.js 18.17+), jendela yang sama:
+
+```bash
+npx github:askiya/SANTRI-SKILLS app
+```
+
+### Cara kerja `SantriHub.exe`
+
+`SantriHub.exe` adalah [Node.js Single Executable Application](https://nodejs.org/api/single-executable-applications.html). Seluruh aplikasi (`bin/`, `src/`, `registry.json`, aset) ikut di dalam exe dan diekstrak sekali ke `%LOCALAPPDATA%\SantriHubpp-<hash>`; build baru mendapat folder baru dan folder lama dibersihkan. `SantriHub.exe mcp-serve` menjalankan MCP stdio server, sehingga entri MCP yang ditulis dashboard tetap berlaku setelah update. Exe bertipe aplikasi GUI, jadi tidak membuka jendela console.
+
+### Membuat rilis
+
+1. Naikkan `version` di `package.json` (misalnya `0.2.0`) dan commit.
+2. Buat dan push tag yang sama persis: `git tag v0.2.0 && git push origin v0.2.0`.
+3. Workflow [`release-santrihub.yml`](.github/workflows/release-santrihub.yml) di runner Windows menjalankan tes, membangun `SantriHub.exe`, smoke test (`--version` dan MCP stdio), membuat `SantriHub-Setup.exe` dengan Inno Setup, menguji install/uninstall diam-diam, lalu menerbitkan GitHub Release berisi installer, exe portable, dan `SHA256SUMS.txt`.
+
+Build lokal (Windows x64): `npm run build:exe` → `dist/SantriHub.exe`; installer: `ISCC.exe /DAppVersion=0.2.0 installer\santrihub.iss` → `dist/SantriHub-Setup.exe`.
 
 ## Menambah repo skill dan MCP sendiri
 

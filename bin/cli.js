@@ -37,6 +37,7 @@ Penggunaan:
   npx santriverse-skills mcp-serve     Jalankan MCP stdio server
   npx santriverse-skills uninstall     Hapus instalasi milik Santri Skills
   npx santriverse-skills dashboard     Buka dashboard localhost (pilih skill/MCP via browser)
+  npx santriverse-skills app           Buka SantriHub sebagai jendela aplikasi (Windows + Edge)
 
 Opsi:
   --scope=project|global               Target instalasi (default: tanya)
@@ -115,6 +116,7 @@ async function main() {
   const { command, flags } = parse(process.argv.slice(2));
   if (flags.version || command === 'version') return console.log(pkg.version);
   if (command === 'mcp-serve') return require('../src/mcp-server').serve(); // stdout must stay JSON-only
+  if (command === 'app') return require('../src/desktop-host').startDesktop({ version: pkg.version });
 
   console.log(banner(pkg.version));
   if (flags.help || command === 'help') return console.log(help());
