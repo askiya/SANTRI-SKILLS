@@ -118,3 +118,56 @@ test('release workflow: tag must match version, assets keep a stable download na
   assert.match(yml, /releases\/latest\/download\/SantriHub-Setup\.exe/);
   assert.match(read('.gitignore'), /^dist\/$/m);
 });
+
+// ── Login through the member's own browser (app mode) ────────────────────────
+
+test('only the Santriverse connect page calling back to this SantriHub may be opened', () => {
+  const origin = 'http://127.0.0.1:5555';
+  const good = `https://santriverse.my.id/skills/connect?callback=${encodeURIComponent(origin + '/auth/callback')}&state=x&code_challenge=y&code_challenge_method=S256`;
+  assert.equal(desktop.isAllowedLoginUrl(good, origin, 'https://santriverse.my.id'), true);
+  for (const bad of [
+    good.replace('santriverse.my.id', 'evil.example'),
+    good.replace('/skills/connect', '/skills/connect/../x'),
+    good.replace('5555', '6666'),
+    'https://user:pw@santriverse.my.id/skills/connect?callback=' + encodeURIComponent(origin + '/auth/callback'),
+    'javascript:alert(1)', null, 42,
+  ]) assert.equal(desktop.isAllowedLoginUrl(bad, origin, 'https://santriverse.my.id'), false, String(bad));
+});
+
+test('app mode opens login in the default browser and brings the window back', async () => {
+  const { createDashboardServer } = require('../src/dashboard.js');
+  const opened = [];
+  let focused = 0;
+  const server = desktop.attachBrowserLogin(createDashboardServer({ cwd: ROOT }), { open: (u) => opened.push(u), focus: () => { focused++; } });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const post = (p, body, headers = {}) => fetch(origin + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, ...headers }, body: JSON.stringify(body) });
+  try {
+    const page = await (await fetch(origin + '/')).text();
+    assert.match(page, /<script src="\/__santrihub\/desktop\.js"><\/script><\/body>/);
+    const script = await fetch(origin + '/__santrihub/desktop.js');
+    assert.equal(script.status, 200);
+    assert.match(await script.text(), /open-login/);
+
+    const { url } = await (await post('/api/auth/login', {})).json();
+    assert.equal(desktop.isAllowedLoginUrl(url, origin), true, url);
+
+    assert.equal((await post('/__santrihub/open-login', { url }, { Origin: 'https://evil.example' })).status, 403);
+    assert.equal((await post('/__santrihub/open-login', { url: 'https://evil.example/' })).status, 400);
+    assert.equal(opened.length, 0);
+    assert.equal((await post('/__santrihub/open-login', { url })).status, 200);
+    assert.deepEqual(opened, [url]);
+
+    const callback = await (await fetch(origin + '/auth/callback')).text();
+    assert.match(callback, /Login berhasil/);
+    assert.match(callback, /\/api\/auth\/callback/);
+    assert.equal((await post('/__santrihub/focus', {})).status, 200);
+    assert.equal(focused, 1);
+
+    // Everything else still belongs to the dashboard (premium gate intact).
+    assert.equal((await fetch(origin + '/api/auth/status')).status, 401);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise(r => server.close(r));
+  }
+});

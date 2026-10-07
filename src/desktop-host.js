@@ -80,6 +80,158 @@ function watchWindows(profile, onEvent) {
   return ps;
 }
 
+// ── Login in the member's own browser ───────────────────────────────────────
+// The app window uses a private Edge profile, so the member is not signed in to
+// Google/Santriverse there. In app mode the login button opens the default
+// browser instead; Santriverse redirects back to 127.0.0.1:<port>/auth/callback,
+// which the local server accepts from any browser (state + PKCE stay server-side).
+const DEFAULT_WEBSITE = 'https://santriverse.my.id';
+const websiteBase = (env = process.env) => String(env.SANTRI_SKILLS_WEBSITE_URL || DEFAULT_WEBSITE).replace(/\/+$/, '');
+
+/** Only the Santriverse connect page that calls back to this very SantriHub may be opened. */
+function isAllowedLoginUrl(raw, origin, website = websiteBase()) {
+  let url;
+  try { url = new URL(raw); } catch { return false; }
+  return `${url.origin}${url.pathname}` === `${website}/skills/connect`
+    && url.searchParams.get('callback') === `${origin}/auth/callback`
+    && !url.username && !url.password;
+}
+
+const APP_SCRIPT = `(() => {
+  'use strict';
+  document.cookie = 'santrihub_app=1; path=/; SameSite=Strict';
+  const say = (text) => { const el = document.getElementById('gate-feedback'); if (el) el.textContent = text; };
+  const post = async (url, body) => {
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    return data;
+  };
+  let poll = null;
+  document.addEventListener('click', async (event) => {
+    const button = event.target.closest && event.target.closest('#login');
+    if (!button) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (button.dataset.browserLogin === 'busy') return;
+    button.dataset.browserLogin = 'busy';
+    try {
+      say('Membuka browser untuk login Santriverse…');
+      const { url } = await post('/api/auth/login');
+      await post('/__santrihub/open-login', { url });
+      say('Selesaikan login di browser. SantriHub masuk otomatis setelah berhasil.');
+      clearInterval(poll);
+      const started = Date.now();
+      poll = setInterval(async () => {
+        if (Date.now() - started > 5 * 60 * 1000) { clearInterval(poll); say('Waktu login habis. Klik login lagi.'); return; }
+        const res = await fetch('/api/auth/status').catch(() => null);
+        if (res && res.ok) { clearInterval(poll); location.reload(); }
+      }, 1500);
+    } catch (error) {
+      say(error.message || 'Gagal membuka browser.');
+    } finally {
+      setTimeout(() => { delete button.dataset.browserLogin; }, 3000);
+    }
+  }, true);
+})();
+`;
+
+const CALLBACK_PAGE = `<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SantriHub</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d12;color:#f4f6fb;font:16px/1.5 system-ui,sans-serif}main{max-width:420px;padding:32px;text-align:center}h1{font-size:22px;margin:12px 0 8px}p{color:#a8b0c0;margin:0}.ok{color:#4dd69e}.err{color:#ff7b88}img{width:56px;height:70px;object-fit:contain}</style></head>
+<body><main><img src="/assets/santriverse-logo.webp" alt=""><h1 id="title">Menghubungkan SantriHub…</h1><p id="text">Sebentar, sedang memverifikasi akun Premium.</p></main>
+<script>(function(){
+  var p = new URLSearchParams(location.hash.slice(1));
+  history.replaceState(null, '', location.pathname);
+  var inApp = document.cookie.indexOf('santrihub_app=1') >= 0;
+  function show(title, text, cls){ var t = document.getElementById('title'); t.textContent = title; t.className = cls || ''; document.getElementById('text').textContent = text; }
+  fetch('/api/auth/callback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: p.get('state'), ticket: p.get('ticket') }) })
+    .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ if (!r.ok) throw new Error(d.error || 'Login gagal.'); }); })
+    .then(function(){
+      if (inApp) { location.href = '/'; return; }
+      show('Login berhasil ✓', 'Kembali ke aplikasi SantriHub. Tab ini boleh ditutup.', 'ok');
+      fetch('/__santrihub/focus', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(function(){});
+      setTimeout(function(){ window.close(); }, 1200);
+    })
+    .catch(function(e){ show('Login belum berhasil', (e && e.message ? e.message : 'Coba lagi dari aplikasi SantriHub.'), 'err'); });
+})();</script></body></html>`;
+
+/**
+ * Wrap the dashboard's request handler with the app-mode login routes.
+ * Every other request (and all premium checks) still goes to the dashboard.
+ */
+function attachBrowserLogin(server, { focus = () => {}, open = openExternal } = {}) {
+  const dashboard = server.listeners('request');
+  server.removeAllListeners('request');
+  server.on('request', (req, res) => {
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const pathname = (req.url || '').split(/[?#]/)[0];
+    const sameOriginJson = () => req.headers.origin === origin && req.headers['content-type'] === 'application/json';
+    const json = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
+
+    if (req.method === 'GET' && pathname === '/__santrihub/desktop.js') {
+      res.writeHead(200, { 'Content-Type': 'text/javascript', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' });
+      return res.end(APP_SCRIPT);
+    }
+    if (req.method === 'GET' && pathname === '/auth/callback') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'" });
+      return res.end(CALLBACK_PAGE);
+    }
+    if (req.method === 'POST' && (pathname === '/__santrihub/open-login' || pathname === '/__santrihub/focus')) {
+      if (!sameOriginJson()) return json(403, { error: 'Ditolak.' });
+      let raw = '';
+      req.on('data', (chunk) => { raw += chunk; if (raw.length > 4096) req.destroy(); });
+      req.on('end', () => {
+        if (pathname === '/__santrihub/focus') { focus(); return json(200, { ok: true }); }
+        let url;
+        try { url = JSON.parse(raw).url; } catch { url = null; }
+        if (!isAllowedLoginUrl(url, origin)) return json(400, { error: 'URL login tidak diizinkan.' });
+        open(url);
+        return json(200, { opened: true });
+      });
+      return undefined;
+    }
+    if (req.method === 'GET' && pathname === '/') {
+      // Load the app-mode login script after the dashboard's own scripts.
+      // (writeHead headers are not visible to getHeader, so capture them here.)
+      let html = false;
+      const writeHead = res.writeHead.bind(res);
+      res.writeHead = (status, ...args) => {
+        const headers = args.find(a => a && typeof a === 'object');
+        if (headers) {
+          for (const key of Object.keys(headers)) {
+            if (/^content-type$/i.test(key)) html = /text\/html/i.test(String(headers[key]));
+            if (/^content-length$/i.test(key)) delete headers[key]; // body grows by one tag
+          }
+        }
+        return writeHead(status, ...args);
+      };
+      const end = res.end.bind(res);
+      res.end = (chunk, ...rest) => {
+        if (chunk && html) chunk = String(chunk).replace(/<\/body>/i, '<script src="/__santrihub/desktop.js"></script></body>');
+        return end(chunk, ...rest);
+      };
+    }
+    for (const handler of dashboard) handler.call(server, req, res);
+    return undefined;
+  });
+  return server;
+}
+
+/** Default browser of the member (no shell: the URL is passed as one argument). */
+function openExternal(url) {
+  spawn('rundll32.exe', ['url.dll,FileProtocolHandler', url], { stdio: 'ignore', windowsHide: true, detached: true }).unref();
+}
+
+/** Bring the SantriHub window to the front after a browser login. */
+function focusWindow(profile) {
+  const needle = profile.replace(/'/g, "''");
+  const script = [
+    `$p = Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${needle}') } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue } | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1`,
+    'if ($p) { (New-Object -ComObject WScript.Shell).AppActivate($p.Id) | Out-Null }',
+  ].join('\n');
+  spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { stdio: 'ignore', windowsHide: true, detached: true }).unref();
+}
+
 function openWindow(edge, url, profile) {
   return spawn(edge, [`--app=${url}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check'], { stdio: 'ignore', windowsHide: false });
 }
@@ -111,6 +263,7 @@ function startDesktop({ version = '' } = {}) {
   const server = createDashboardServer({ cwd: process.cwd() });
   let lastRequest = Date.now();
   server.on('request', () => { lastRequest = Date.now(); });
+  attachBrowserLogin(server, { focus: () => focusWindow(profile) });
 
   let closing = false;
   let watcher = null;
@@ -148,6 +301,6 @@ function startDesktop({ version = '' } = {}) {
   return server;
 }
 
-module.exports = { startDesktop, liveLock, isAlive, findEdge, dataDir, windowWatcherScript, IDLE_SHUTDOWN_MS };
+module.exports = { startDesktop, liveLock, isAlive, findEdge, dataDir, windowWatcherScript, attachBrowserLogin, isAllowedLoginUrl, IDLE_SHUTDOWN_MS };
 
 if (require.main === module) startDesktop();
