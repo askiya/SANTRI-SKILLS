@@ -185,9 +185,16 @@ describe('catalog.js (extension)', () => {
     assert.ok(html.includes('Buka Gem'));
   });
 
-  it('renderCard uses Buka Gemini for skill type', () => {
+  it('renderCard offers one-click install for skill type', () => {
     const html = catalog.renderCard(mockItems[0]);
-    assert.ok(html.includes('Buka Gemini'));
+    assert.ok(html.includes('Pasang ke Gemini'));
+    assert.ok(html.includes('data-action="install"'));
+    assert.ok(html.includes('Download ZIP'));
+  });
+
+  it('renderCard reflects Gemini detection and updates', () => {
+    assert.ok(catalog.renderCard({ ...mockItems[0], status: 'detected' }).includes('Pasang ulang'));
+    assert.ok(catalog.renderCard({ ...mockItems[0], status: 'update_available' }).includes('Update di Gemini'));
   });
 
   it('statusLabel returns correct labels', () => {

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Santri Skills",
-  "version": "0.1.1",
-  "description": "Kelola dan pasang Santriverse Skills ke Google Gemini.",
+  "version": "0.2.0",
+  "description": "Pasang Santriverse Skills ke Google Gemini dalam 2 klik (khusus Member Premium).",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsAVggIZGe09a7A/rJ8cXnCGKvg0e83ZvZu4UooMx1hEtP19ywaAFT/J0h0wn1PcMhGqvdohBBi5i4v9WP5D44kRYN153cW3IO66hpL1IfsjEk/lTLV/A9qaX7FZIfcn2F8dI6GL2dT/Zc1txGHc7xJcLd7hIr+PeWVlAK/a9jxURVHziIMAP+biFFdsvBIw/18jK42SNZAnmUk5al2sc00E+ashEXRCwpqjQnvFVcDy0CS3D35nNumnZBOQn+DFvwvhckwW0iUzkEsgw43EkOYGls+yRMkMA4R1f2WhsG2EUSPAzkDYIAUC6Lc/uM9t7tC134fLnYOBDV3l3aqtgOwIDAQAB",
   "permissions": [
     "sidePanel",
@@ -24,9 +24,24 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://gemini.google.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "content.js",
+        "gemini-skills.js"
+      ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "gemini-skills-bridge.js"
+      ],
+      "run_at": "document_idle",
+      "world": "MAIN"
     }
   ],
   "action": {
@@ -43,5 +58,6 @@
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
-  }
+  },
+  "minimum_chrome_version": "114"
 }

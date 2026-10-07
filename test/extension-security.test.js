@@ -79,9 +79,9 @@ test('content script only reports navigation, never claims package state', () =>
 
 test('panel reports unavailable package endpoint rather than fabricating download',()=>{const code=fs.readFileSync(path.join(root,'sidepanel.js'),'utf8');assert.match(code,/Paket belum tersedia/);assert.match(code,/downloadPackage/);assert.doesNotMatch(code,/github\.com/);});
 
-test('Gemini URL uses /app and manual steps are honest', () => {
+test('Gemini URL targets the Skills page and manual steps are honest', () => {
   const adapter = load('gemini-adapter.js');
-  assert.equal(adapter.GEMINI_SKILLS_URL, 'https://gemini.google.com/app');
+  assert.equal(adapter.GEMINI_SKILLS_URL, 'https://gemini.google.com/skills');
   const steps = adapter.getManualSteps('skill');
   assert.ok(steps.length >= 3);
   // No step should claim automatic upload

@@ -3,6 +3,8 @@
 const API_BASE = 'https://api.santriverse.my.id/api';
 const WEBSITE_BASE = 'https://santriverse.my.id';
 const REMOTE_TIMEOUT_MS = 20000;
+const UPGRADE_URL = `https://santriverse.my.id/checkout`;
+const PREMIUM_REQUIRED_MESSAGE = 'Fitur ini khusus Member Premium Santriverse.';
 
 const b64url = (buf) => {
   let s = '';
@@ -59,8 +61,16 @@ async function callAPI(pathname, { method = 'GET', token, body } = {}) {
   if (body) headers['content-type'] = 'application/json';
   const res = await fetch(`${API_BASE}${pathname}`, { method, headers, body: body ? JSON.stringify(body) : undefined, redirect: 'error', signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS) });
   if (!res.ok) {
-    const err = new Error(res.status === 401 ? 'Sesi tidak valid.' : res.status === 403 ? 'Akses ditolak server.' : `Server error (${res.status})`);
+    let code = '';
+    try { code = String((await res.json())?.code || ''); } catch { /* non-JSON error body */ }
+    const err = new Error(
+      code === 'premium_required' ? PREMIUM_REQUIRED_MESSAGE
+        : res.status === 401 ? 'Sesi tidak valid.'
+          : res.status === 403 ? 'Akses ditolak server.'
+            : `Server error (${res.status})`,
+    );
     err.status = res.status;
+    err.code = code;
     throw err;
   }
   const data = await res.json();
@@ -93,6 +103,33 @@ async function restoreSession() {
     throw error;
   }
 }
+/**
+ * Live entitlement check against the Santriverse API (not a cached flag):
+ * the server re-reads the member's premium status on every Skills request.
+ */
+async function verifyPremium() {
+  const session = await getSession();
+  if (!session) {
+    const err = new Error('Sesi berakhir. Hubungkan ulang akun Santriverse.');
+    err.status = 401;
+    throw err;
+  }
+  try {
+    const data = await callAPI('/skills/session', { token: session.token });
+    const user = publicUser(data.user);
+    if (!user.premium) {
+      const err = new Error(PREMIUM_REQUIRED_MESSAGE);
+      err.status = 403;
+      err.code = 'premium_required';
+      throw err;
+    }
+    await saveSession(session.token, data.user, data.expires_at ? Date.parse(data.expires_at) : undefined);
+    return { token: session.token, user };
+  } catch (error) {
+    if (error.status === 401 || error.code === 'premium_required') await clearSession();
+    throw error;
+  }
+}
 async function revokeSession() {
   const session = await getSession();
   try { if (session) await callAPI('/skills/session', { method: 'DELETE', token: session.token }); }
@@ -100,7 +137,14 @@ async function revokeSession() {
 }
 async function downloadPackage(pkg, token) {
   const res = await fetch(`${API_BASE}/skills/packages/${encodeURIComponent(pkg.id)}/download`, { headers: { authorization: `Bearer ${token}`, accept: 'application/zip' }, redirect: 'error', signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS) });
-  if (!res.ok) { const error = new Error(`Download gagal (${res.status}).`); error.status = res.status; throw error; }
+  if (!res.ok) {
+    let code = '';
+    try { code = String((await res.json())?.code || ''); } catch { /* non-JSON error body */ }
+    const error = new Error(code === 'premium_required' ? PREMIUM_REQUIRED_MESSAGE : `Download gagal (${res.status}).`);
+    error.status = res.status;
+    error.code = code;
+    throw error;
+  }
   const bytes = await res.arrayBuffer();
   if (!Number.isSafeInteger(pkg.file_size) || pkg.file_size < 1 || bytes.byteLength !== pkg.file_size || bytes.byteLength > 20 * 1024 * 1024) throw new Error('Ukuran paket tidak cocok.');
   const digest = hex(await crypto.subtle.digest('SHA-256', bytes));
@@ -109,4 +153,4 @@ async function downloadPackage(pkg, token) {
 }
 
 globalThis.skillsAuth = { login };
-if (typeof module !== 'undefined') module.exports = { API_BASE, WEBSITE_BASE, buildLoginURL, isPremium, publicUser, saveSession, getSession, clearSession, callAPI, login, restoreSession, revokeSession, downloadPackage };
+if (typeof module !== 'undefined') module.exports = { API_BASE, WEBSITE_BASE, UPGRADE_URL, buildLoginURL, isPremium, publicUser, saveSession, getSession, clearSession, callAPI, login, restoreSession, verifyPremium, revokeSession, downloadPackage };
