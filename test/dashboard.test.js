@@ -30,6 +30,22 @@ test('GitHub ingest parser accepts bounded repo/tree URLs and rejects foreign ho
  for(const url of ['http://github.com/a/b','https://evil.example/a/b','https://github.com.evil/a/b','https://x@github.com/a/b','https://github.com:444/a/b','https://github.com/a/b/issues','https://github.com/a/b/tree/main/../x','https://github.com/a/b?token=x','https://github.com/a/b/tree/main/%2e%2e/x'])assert.throws(()=>parseIngestUrl(url));
 });
 
+test('repo bookmarks require premium and CSRF, use held detection, persist across restart and reject unsafe URLs',()=>fixture(async({base,post,login,cwd,restart})=>{
+ assert.equal((await fetch(base+'/api/repos')).status,401);assert.equal((await post('/api/repos',{url:'https://github.com/fixture/repo'})).status,401);
+ const _csrf=(await (await post('/api/auth/callback',{state:await login(),ticket:'ticket_abc'})).json()).csrf;
+ assert.equal((await post('/api/repos',{url:'https://github.com/fixture/repo'})).status,403);
+ for(const url of ['http://github.com/fixture/repo','https://github.com/fixture/repo?token=SECRET','https://github.com/fixture/repo/tree/main','https://github.com/fixture/repo/','https://github.com/fixture/repo#SECRET'])assert.equal((await post('/api/repos',{_csrf,url})).status,400);
+ const url='https://github.com/fixture/repo',pasted='https://github.com/Fixture/Repo';const response=await post('/api/github/preview',{_csrf,scope:'global',url:pasted});const preview=await response.json();assert.equal(response.status,200,JSON.stringify(preview));
+ assert.equal((await post('/api/repos',{_csrf,url:pasted,previewId:preview.previewId,skills:['FAKE'],mcp:['SECRET'],installCommands:['SECRET']})).status,200);
+ assert.equal((await post('/api/repos',{_csrf,url,previewId:preview.previewId})).status,409);
+ const rows=await (await fetch(base+'/api/repos')).json();assert.equal(rows.length,1);assert.deepEqual(rows[0],{url,repo:'fixture/repo',skills:['Demo'],mcp:[]});
+ const file=path.join(cwd,'.santrihub','repos.json');assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')),rows);assert.doesNotMatch(fs.readFileSync(file,'utf8'),/SECRET|FAKE|installCommands/);
+ assert.equal((await post('/api/repos/delete',{url})).status,403);assert.equal((await post('/api/repos/delete',{_csrf,url})).status,200);assert.deepEqual(await (await fetch(base+'/api/repos')).json(),[]);
+ const full=Array.from({length:50},(_,i)=>({url:`https://github.com/fixture/repo${i}`,repo:`fixture/repo${i}`,skills:[],mcp:[]}));fs.writeFileSync(file,JSON.stringify(full));
+ const next=await (await post('/api/github/preview',{_csrf,scope:'global',url})).json();assert.equal((await post('/api/repos',{_csrf,url,previewId:next.previewId})).status,400);
+ assert.deepEqual(await (await fetch(base+'/api/repos')).json(),full);
+ const after=await restart();assert.deepEqual(await (await fetch(after.base+'/api/repos')).json(),full);
+},{githubFetch:async u=>String(u).includes('/git/trees/')?new Response(JSON.stringify({tree:[{path:'demo/SKILL.md',type:'blob'}]}),{headers:{'content-type':'application/json'}}):String(u).includes('api.github.com/repos/')?new Response(JSON.stringify({default_branch:'main'}),{headers:{'content-type':'application/json'}}):new Response('---\nname: Demo\n---\nsafe',{headers:{'content-type':'text/plain'}})}));
 test('project-only skill never appears globally installed or verified',()=>fixture(async({base,post,login,cwd})=>{
  const _csrf=(await (await post('/api/auth/callback',{state:await login(),ticket:'ticket_abc'})).json()).csrf;
  const project=path.join(cwd,'.agents','skills','demo');fs.mkdirSync(project,{recursive:true});fs.writeFileSync(path.join(project,'SKILL.md'),'project only');
@@ -53,6 +69,49 @@ test('verify reads disk and missing PATH without invoking app controls',()=>fixt
  for(const action of ['close','restart'])assert.equal((await post('/api/antigravity/control',{_csrf,action})).status,400);
 }, {controlRunner:()=>assert.fail('read/check or unconfirmed control must never invoke controller')}));
 
+test('catalog includes exact bundled repositories and every fetched skill with empty remote sources',()=>{
+ const requested=[];
+ return fixture(async({base,post,login})=>{
+  await post('/api/auth/callback',{state:await login(),ticket:'ticket_abc'});
+  const response=await fetch(base+'/api/catalog');assert.equal(response.status,200);
+  const catalog=await response.json();
+  assert.deepEqual(requested.map(s=>s.repo),['askiya/GOOGLE-APPSCRIPT-SKILLS','askiya/MONOREPO-SKILLS']);
+  assert.deepEqual(requested,require('../src/sources').registry().sources);
+  assert.equal(catalog.skills.length,1050);
+  assert.equal(new Set(catalog.skills.map(s=>s.id)).size,1050);
+  for(const source of requested)for(let i=0;i<525;i++)assert.ok(catalog.skills.some(s=>s.id===`${source.id}-${i}`&&s.source===source.id));
+  assert.deepEqual(catalog.mcpServers.map(m=>m.id),['santri-skills']);
+ },{sourceFetch:async(source,root)=>{
+  requested.push(source);
+  for(let i=0;i<525;i++){const dir=path.join(root,source.id,source.skillsDir,`${source.id}-${i}`);fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'SKILL.md'),'---\ndescription: Fixture\n---\n');}
+  return path.join(root,source.id);
+ }});
+});
+
+test('remote catalog adds unique sources and MCP without overriding bundled source IDs or repos',()=>{
+ const requested=[];
+ const bundled=require('../src/sources').registry().sources;
+ const extra={id:'premium',repo:'premium/EXTRA-SKILLS',branch:'main',skillsDir:'skills'};
+ return fixture(async({base,post,login})=>{
+  await post('/api/auth/callback',{state:await login(),ticket:'ticket_abc'});
+  const response=await fetch(base+'/api/catalog');assert.equal(response.status,200);
+  const data=await response.json();
+  assert.deepEqual(requested.map(s=>s.repo),[...bundled.map(s=>s.repo),extra.repo]);
+  assert.deepEqual(data.skills.map(s=>s.id),['appscript-one','monorepo-one','premium-one']);
+  assert.deepEqual(data.mcpServers.map(s=>s.id),['santri-skills','premium-mcp']);
+ },{remoteCatalog:{sources:[{...bundled[0],repo:'attacker/OVERRIDE'}, {...bundled[1],id:'other-id'},extra],mcpServers:[{id:'premium-mcp',command:'premium',args:[]}]},sourceFetch:async(source,root)=>{
+  requested.push(source);const dir=path.join(root,source.id,source.skillsDir,source.id+'-one');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'SKILL.md'),'safe');return path.join(root,source.id);
+ }});
+});
+
+test('ambiguous skill IDs from distinct sources fail closed',()=>fixture(async({base,post,login})=>{
+ await post('/api/auth/callback',{state:await login(),ticket:'ticket_abc'});
+ const response=await fetch(base+'/api/catalog');assert.equal(response.status,400);
+ assert.match((await response.json()).error,/ID skill katalog ambigu/);
+},{sourceFetch:async(source,root)=>{
+ const dir=path.join(root,source.id,source.skillsDir,'collision');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'SKILL.md'),'safe');return path.join(root,source.id);
+}}));
+
 async function fixture(fn, serverOptions = {}) {
  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'santri-auth-'));
  let mode = 200, exchanges = 0;
@@ -60,15 +119,16 @@ async function fixture(fn, serverOptions = {}) {
   if (mode === 503) return req.socket.destroy();
   res.setHeader('Content-Type','application/json'); res.statusCode = mode;
   if (req.method === 'POST' && req.url.endsWith('/skills/session')) { exchanges++; let raw=''; for await(const c of req) raw+=c; assert.match(JSON.parse(raw).code_verifier,/^[\w-]{43,128}$/); }
-  res.end(JSON.stringify(req.url.endsWith('catalog') ? {success:true,sources:[],mcpServers:[]} : {success:mode===200, token:'PRIVATE_TEST_TOKEN', user:{name:'Member',is_premium:mode===200}}));
+  res.end(JSON.stringify(req.url.endsWith('catalog') ? {success:true,sources:[],mcpServers:[],...serverOptions.remoteCatalog} : {success:mode===200, token:'PRIVATE_TEST_TOKEN', user:{name:'Member',is_premium:mode===200}}));
  });
  await new Promise(r=>remote.listen(0,'127.0.0.1',r));
- const server=createDashboardServer({cwd,home:cwd,env:{},...serverOptions,apiUrl:`http://127.0.0.1:${remote.address().port}/api`});
+ const makeServer=()=>createDashboardServer({cwd,home:cwd,env:{},...serverOptions,sourceFetch:source=>serverOptions.sourceFetch?serverOptions.sourceFetch(source,cwd):Promise.resolve(cwd),apiUrl:`http://127.0.0.1:${remote.address().port}/api`});let server=makeServer();
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
  const base=`http://127.0.0.1:${server.address().port}`;
  const post=(url,body={})=>fetch(base+url,{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify(body)});
  const login=async()=>{const r=await post('/api/auth/login'); assert.equal(r.status,200);const {url}=await r.json(); const u=new URL(url); assert.match(u.searchParams.get('state'),/^[a-f0-9]{64}$/);assert.match(u.searchParams.get('code_challenge'),/^[\w-]{43}$/);return u.searchParams.get('state');};
- try {await fn({base,post,login,cwd,setMode:n=>mode=n,exchanges:()=>exchanges});} finally {server.closeAllConnections();remote.closeAllConnections();await Promise.all([new Promise(r=>server.close(r)),new Promise(r=>remote.close(r))]);fs.rmSync(cwd,{recursive:true,force:true});}
+ const restart=async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));server=makeServer();await new Promise(r=>server.listen(0,'127.0.0.1',r));const nextBase=`http://127.0.0.1:${server.address().port}`,nextPost=(url,body={})=>fetch(nextBase+url,{method:'POST',headers:{origin:nextBase,'content-type':'application/json'},body:JSON.stringify(body)});const auth=await (await nextPost('/api/auth/login')).json(),state=new URL(auth.url).searchParams.get('state');await nextPost('/api/auth/callback',{state,ticket:'ticket_restart'});return {base:nextBase,post:nextPost}};
+ try {await fn({base,post,login,restart,cwd,setMode:n=>mode=n,exchanges:()=>exchanges});} finally {server.closeAllConnections();remote.closeAllConnections();await Promise.all([new Promise(r=>server.close(r)),new Promise(r=>remote.close(r))]);fs.rmSync(cwd,{recursive:true,force:true});}
 }
 test('signed-out dashboard gates every data and write endpoint, no files',()=>fixture(async({base,post,cwd})=>{
  assert.equal((await fetch(base+'/')).status,200);
@@ -194,14 +254,47 @@ test('status renderer distinguishes missing, invalid and configured MCP with cat
  const vm=require('node:vm'), source=fs.readFileSync(path.join(__dirname,'../src/dashboard-ui.js'),'utf8');
  const nodes={}; const context={ $:id=>nodes[id]||(nodes[id]={}), esc:x=>String(x??'').replaceAll('<','&lt;'), renderSkills(){},renderMcp(){},catalog:{skills:[{id:'wanted'}],mcpServers:[{id:'wanted-mcp'}]} };
  vm.createContext(context);
- const render=source.slice(source.indexOf('function renderStatus()'),source.indexOf("$('#refresh-status').onclick"));
- const run=mcp=>{context.lastStatus={scope:'project',skills:[{id:'unrelated',managed:false}],skillTargets:[{dir:'C:/project/.agents/skills',exists:true}],mcp};vm.runInContext(render+';renderStatus()',context);return nodes['#status-view'].innerHTML;};
+ const render=source.slice(source.indexOf('function renderStatus()'),source.indexOf("document.addEventListener('visibilitychange'"));
+ const run=mcp=>{context.lastStatus={scope:'project',skills:[{id:'unrelated',dir:'C:/external/unrelated',managed:false}],skillTargets:[{dir:'C:/project/.agents/skills',exists:true}],mcp};vm.runInContext(render+';renderStatus()',context);return nodes['#status-view'].innerHTML;};
  assert.match(run({exists:false,valid:true,servers:[],configFile:'C:/project/.agents/mcp_config.json'}),/FILE BELUM ADA/);
  assert.match(nodes['#install-counts'].innerHTML,/1 terpasang · 1 belum/);
  assert.match(run({exists:true,valid:false,servers:[],configFile:'config'}),/JSON RUSAK/);
  assert.match(run({exists:true,valid:true,servers:[{name:'wanted-mcp'}],configFile:'config'}),/DIKONFIGURASI · 1/);
  assert.match(nodes['#status-view'].innerHTML,/runtime belum diverifikasi/);
  assert.match(nodes['#install-counts'].innerHTML,/1 dikonfigurasi · 0 belum/);
+ assert.match(nodes['#status-view'].innerHTML,/C:&#x2F;|config/);
+});
+test('status rows show catalog misses, external paths, builtin MCP and unknown on invalid JSON',()=>{
+ const vm=require('node:vm'),source=fs.readFileSync(path.join(__dirname,'../src/dashboard-ui.js'),'utf8');
+ const nodes={},context={$:id=>nodes[id]||(nodes[id]={}),esc:x=>String(x??'').replaceAll('<','&lt;'),renderSkills(){},renderMcp(){},catalog:{skills:[{id:'wanted'}],mcpServers:[{id:'builtin-id',builtin:true,label:'Santri Skills'},{id:'missing-mcp'}]}};
+ vm.createContext(context);
+ const render=source.slice(source.indexOf('function renderStatus()'),source.indexOf("document.addEventListener('visibilitychange'"));
+ context.lastStatus={scope:'global',skills:[{id:'external',dir:'C:/other/external'}],skillTargets:[{dir:'C:/target/skills'}],mcp:{exists:true,valid:true,configFile:'C:/target/mcp_config.json',servers:[{name:'santri-skills'},{name:'external-mcp'}]}};
+ vm.runInContext(render+';renderStatus()',context);
+ const html=nodes['#status-view'].innerHTML;
+ for(const text of ['FILE ADA','BELUM ADA','CONFIG ADA','C:/other/external/SKILL.md','C:/target/skills/wanted/SKILL.md','mcpServers.santri-skills','mcpServers.missing-mcp','external-mcp'])assert.ok(html.includes(text),text);
+ assert.match(nodes['#install-counts'].innerHTML,/2 dikonfigurasi · 1 belum/);
+ context.lastStatus.mcp.valid=false;vm.runInContext('renderStatus()',context);
+ assert.doesNotMatch(nodes['#status-view'].innerHTML,/mcpServers.missing-mcp[\s\S]*BELUM ADA/);
+ assert.match(nodes['#status-view'].innerHTML,/TIDAK DIKETAHUI/);
+});
+test('status polling serializes reads, keeps rows, stops hidden/signed-out and drops stale results',async()=>{
+ const vm=require('node:vm'),source=fs.readFileSync(path.join(__dirname,'../src/dashboard-ui.js'),'utf8'),nodes={'#page-status':{hidden:false},'#locked':{open:false},'#status-view':{innerHTML:'keep rows'},'#status-checked':{},'#stat-config':{}};
+ let reads=0,resolve;const timers=new Map();let id=0;
+ const context={csrf:'token',lastStatus:{old:true},statusEpoch:0,statusTimer:null,statusRequest:null,AbortController,document:{hidden:false},$:key=>nodes[key]||(nodes[key]={}),scope:()=> 'global',renderStatus(){},getJson:()=>{reads++;return new Promise(r=>resolve=r)},setTimeout:(fn,ms)=>{timers.set(++id,{fn,ms});return id},clearTimeout:n=>timers.delete(n)};
+ vm.createContext(context);vm.runInContext(source.slice(source.indexOf('function statusPollAllowed()'),source.indexOf('function renderStatus()')),context);
+ const first=vm.runInContext('loadStatus(true)',context);await vm.runInContext('loadStatus(true)',context);assert.equal(reads,1);assert.equal(nodes['#status-view'].innerHTML,'keep rows');
+ vm.runInContext('stopStatusPoll();csrf=""',context);resolve({skills:[],mcp:{}});await first;assert.equal(context.lastStatus.old,true);assert.equal(timers.size,0);
+ context.csrf='token';context.document.hidden=true;await vm.runInContext('loadStatus(true)',context);assert.equal(reads,1);
+ context.document.hidden=false;nodes['#page-status'].hidden=true;await vm.runInContext('loadStatus(true)',context);assert.equal(reads,1);
+ nodes['#page-status'].hidden=false;const second=vm.runInContext('loadStatus(true)',context);resolve({skills:[],mcp:{}});await second;assert.equal(reads,2);assert.ok([...timers.values()].some(t=>t.ms===1500));
+});
+test('status timeout reports unknown without repainting known disk rows',async()=>{
+ const vm=require('node:vm'),source=fs.readFileSync(path.join(__dirname,'../src/dashboard-ui.js'),'utf8'),nodes={'#page-status':{hidden:false},'#locked':{open:false},'#status-view':{innerHTML:'known disk rows'},'#status-checked':{},'#stat-config':{}};
+ let timeout;const context={csrf:'token',lastStatus:{old:true},statusEpoch:0,statusTimer:null,statusRequest:null,AbortController,document:{hidden:false},$:key=>nodes[key]||(nodes[key]={}),scope:()=> 'global',getJson:(_url,signal)=>new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})))),setTimeout:(fn,ms)=>{if(ms===8000)timeout=fn;return 1},clearTimeout(){}};
+ vm.createContext(context);vm.runInContext(source.slice(source.indexOf('function statusPollAllowed()'),source.indexOf('function renderStatus()')),context);
+ const pending=vm.runInContext('loadStatus(true)',context);timeout();await pending;
+ assert.match(nodes['#status-checked'].textContent,/tidak diketahui/i);assert.equal(nodes['#status-view'].innerHTML,'known disk rows');
 });
 test('scope UI defaults global, names exact official targets, and check modal avoids false pass claims',()=>{
  const html=fs.readFileSync(path.join(__dirname,'../src/dashboard.html'),'utf8'),ui=fs.readFileSync(path.join(__dirname,'../src/dashboard-ui.js'),'utf8');
@@ -210,19 +303,35 @@ test('scope UI defaults global, names exact official targets, and check modal av
  assert.doesNotMatch(html+ui,/\bLULUS\b/);assert.match(ui,/TERPASANG · /);assert.match(ui,/FILE ADA/);assert.match(ui,/IDE BELUM TERVERIFIKASI/);assert.match(ui,/RUNTIME (?:SIAP|HILANG)/);
  assert.doesNotMatch(html,/antigravity-ide\/(?:mcp|builtin|plugins)/);
 });
-test('status page shows unified install check and separate open/restart actions',()=>{
- const html=fs.readFileSync(path.join(__dirname,'../src/dashboard.html'),'utf8'),css=fs.readFileSync(path.join(__dirname,'../src/dashboard.css'),'utf8');
+test('installed pages keep catalog and local imports inside shared modal',()=>{
+ const html=fs.readFileSync(path.join(__dirname,'../src/dashboard.html'),'utf8');
+ for(const kind of ['skills','mcp']){
+  const page=html.slice(html.indexOf(`<section class="page" id="page-${kind}"`),html.indexOf(`<section class="page" id="page-${kind==='skills'?'mcp':'status'}"`));
+  assert.match(page,new RegExp(`id="open-${kind}-catalog"[^>]*>Buka Kategori`));
+  assert.match(page,new RegExp(`id="installed-${kind}"`));
+  assert.doesNotMatch(page,/local-import|Install terpilih|class="catalog-grid"/);
+ }
+ const modal=html.slice(html.indexOf('<dialog id="catalog-modal"'),html.indexOf('<dialog id="add-chooser"'));
+ for(const id of ['catalog-search','catalog-categories','catalog-items','catalog-install','local-skills-source','local-mcp-source'])assert.match(modal,new RegExp(`id="${id}"`));
+ assert.match(modal,/catalog-modal wizard-dialog/);
+});
+
+test('sticky shell owns compact targets and check wizard stays honest',()=>{
+ const html=fs.readFileSync(path.join(__dirname,'../src/dashboard.html'),'utf8'),css=fs.readFileSync(path.join(__dirname,'../src/dashboard.css'),'utf8'),ui=fs.readFileSync(path.join(__dirname,'../src/dashboard-ui.js'),'utf8');
  assert.match(css,/main\s*>\s*header\s*\{[^}]*position:\s*sticky[^}]*top:\s*0[^}]*z-index:/s);
- assert.match(css,/\.scope-bar\s*\{[^}]*position:\s*sticky/s);
- for(const id of ['status-view','install-counts','target-panel','custom-skills','custom-mcp','validate-custom','refresh-status','open-antigravity','restart-antigravity','force-antigravity','close-check','force-confirm']) assert.match(html,new RegExp(`id="${id}"`));
- assert.match(html,/<dialog id="check-panel"/,'Cek & Tes is a modal dialog, not an inline section');
+ assert.match(html,/<header class="topbar">[\s\S]*class="scope-bar"[\s\S]*<\/header>\s*<dialog id="locked"/);
+ assert.doesNotMatch(html,/<div id="content"[^>]*>\s*<section class="scope-bar"/,'target summary must not remain in body');
+ assert.match(html,/class="target-path"[^>]*tabindex="0"/);assert.match(css,/\.target-path[^}]*text-overflow:\s*ellipsis/);assert.match(css,/@keyframes target-path-marquee/);
+ assert.match(html,/id="check-test" class="check-cta"/);assert.match(css,/\.check-cta[^}]*background:/);
+ for(const id of ['status-view','install-counts','target-panel','custom-skills','custom-mcp','validate-custom','refresh-status','open-antigravity','restart-antigravity','force-antigravity','close-check','force-confirm','check-start','check-finish','check-retry']) assert.match(html,new RegExp(`id="${id}"`));
+ assert.match(html,/<dialog id="check-panel" class="check-panel wizard-dialog"/);
+ assert.match(html,/class="check-stepper wizard-stepper"/);assert.match(html,/<details[^>]*class="check-accordion"/);
  assert.match(html,/id="force-antigravity"[^>]*hidden/,'force restart stays hidden until graceful close fails');
- assert.match(html,/santrihub_status/,'check panel tells the user how to prove the IDE really loaded the server');
- assert.match(css,/\.check-panel::backdrop[^}]*backdrop-filter/);assert.match(css,/\.check-panel \{[^}]*overflow:auto/);
- assert.match(html,/id="open-antigravity"[^>]*>Buka Antigravity IDE</);
- assert.match(html,/id="restart-antigravity"[^>]*>Restart Antigravity IDE</);
- assert.match(html,/Pekerjaan belum disimpan dapat hilang/);
- assert.match(html,/Developer: Reload Window/);assert.match(html,/Manage MCP Servers/);assert.match(html,/~\/\.gemini\/antigravity\/mcp_config\.json/);
+ assert.match(html,/santrihub_status/);assert.match(html,/identitas client tidak diautentikasi/i);
+ assert.match(css,/\.check-panel\.dialog-closing/);assert.match(css,/@media[^}]*prefers-reduced-motion:\s*reduce/s);
+ assert.match(ui,/\/api\/verification\/start/);assert.match(ui,/\/api\/verification\/status/);assert.match(ui,/function stopCheckPoll/);
+ assert.match(html,/id="open-antigravity"[^>]*>Buka Antigravity IDE</);assert.match(html,/id="restart-antigravity"[^>]*>Restart Antigravity IDE</);
+ assert.match(html,/Pekerjaan belum disimpan dapat hilang/);assert.match(html,/Developer: Reload Window/);assert.match(html,/Manage MCP Servers/);
  assert.doesNotMatch(html,/id="reload-antigravity"/);assert.doesNotMatch(css,/1180px|1036px/);
 });
 

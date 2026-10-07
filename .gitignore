@@ -4,3 +4,9 @@ coverage/
 .env
 .DS_Store
 dist/
+
+# Local-only: skills installed by using SantriHub here, separate bot project, Python caches
+.agents/
+Installer_ZettBOT/
+Installer_ZettBOT.zip
+__pycache__/

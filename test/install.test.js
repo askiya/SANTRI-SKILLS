@@ -123,6 +123,39 @@ test('invalid MCP object shapes never change config or backup', () => {
   assert.throws(()=>addMcpServer(file),/object|objek/i);assert.equal(fs.readFileSync(file,'utf8'),raw);assert.equal(fs.readFileSync(file+'.bak','utf8'),'keep backup');
  }} finally {fs.rmSync(cwd,{recursive:true,force:true});}
 });
+test('preset reuses existing backup safely and returns real unique backup on repeated effective write', () => {
+ const {addMcpServer,SHADCN_ENTRY}=require('../src/install'),root=tmp(),file=path.join(root,'mcp_config.json');
+ try {const original=JSON.stringify({other:{token:'SECRET_FIXTURE'},mcpServers:{other:{command:'keep',env:{KEY:'SECRET_FIXTURE'}}}});fs.writeFileSync(file,original);fs.writeFileSync(file+'.bak','old recovery');
+  const first=addMcpServer(file,SHADCN_ENTRY,'shadcn',{preset:'react-bits'});
+  assert.equal(fs.readFileSync(file+'.bak','utf8'),'old recovery');assert.notEqual(first.backup,file+'.bak');assert.equal(fs.readFileSync(first.backup,'utf8'),original);
+  assert.equal(JSON.parse(fs.readFileSync(file)).other.token,'SECRET_FIXTURE');
+  const before=fs.readFileSync(file,'utf8'),again=addMcpServer(file,SHADCN_ENTRY,'shadcn',{preset:'react-bits'});
+  assert.equal(again.backup,null);assert.equal(fs.readFileSync(file,'utf8'),before);
+  const removed=require('../src/install').removeInstalled({kind:'mcp',id:'shadcn',mcpFile:file});assert.notEqual(removed.backup,first.backup);assert.equal(fs.readFileSync(first.backup,'utf8'),original);
+ }finally{fs.rmSync(root,{recursive:true,force:true})}
+});
+test('MCP merge rejects malformed, foreign collisions, symlink, hardlink and device without writing',()=>{
+ const {mergeMcpEntries,SHADCN_ENTRY}=require('../src/install'),root=tmp(),file=path.join(root,'mcp_config.json');
+ try {for(const raw of ['{','[]','{"mcpServers":null}']){fs.writeFileSync(file,raw);assert.throws(()=>mergeMcpEntries(file,{shadcn:SHADCN_ENTRY}));assert.equal(fs.readFileSync(file,'utf8'),raw)}
+  const raw=JSON.stringify({mcpServers:{shadcn:{command:'foreign'}}});fs.writeFileSync(file,raw);assert.throws(()=>mergeMcpEntries(file,{shadcn:SHADCN_ENTRY}),/sudah ada/);assert.equal(fs.readFileSync(file,'utf8'),raw);
+  const linked=path.join(root,'hard.json');fs.linkSync(file,linked);assert.throws(()=>mergeMcpEntries(file,{other:SHADCN_ENTRY}),/Hardlink/);assert.equal(fs.readFileSync(file,'utf8'),raw);fs.unlinkSync(linked);
+  try{const alias=path.join(root,'alias.json');fs.symlinkSync(file,alias);assert.throws(()=>mergeMcpEntries(alias,{other:SHADCN_ENTRY}),/Symlink|junction/i)}catch(e){if(!/operation not permitted|privilege/i.test(e.message))throw e}
+  fs.mkdirSync(path.join(root,'device.json'));assert.throws(()=>mergeMcpEntries(path.join(root,'device.json'),{other:SHADCN_ENTRY}));
+ }finally{fs.rmSync(root,{recursive:true,force:true})}
+});
+test('failed atomic rename retains current bytes and recovery backup, cleans temps and lock',()=>{
+ const {addMcpServer}=require('../src/install'),root=tmp(),file=path.join(root,'mcp_config.json'),rename=fs.renameSync;
+ try{fs.writeFileSync(file,'{"secret":"keep"}');fs.writeFileSync(file+'.bak','older');fs.renameSync=(from,to)=>{if(to===file)throw new Error('fixture rename failure');return rename(from,to)};
+  assert.throws(()=>addMcpServer(file),/fixture rename failure/);assert.equal(fs.readFileSync(file,'utf8'),'{"secret":"keep"}');assert.equal(fs.readFileSync(file+'.bak','utf8'),'older');
+  const backups=fs.readdirSync(root).filter(x=>x.startsWith('mcp_config.json.bak-'));assert.equal(backups.length,1);assert.equal(fs.readFileSync(path.join(root,backups[0]),'utf8'),'{"secret":"keep"}');assert.ok(!fs.readdirSync(root).some(x=>/tmp-|santri-lock/.test(x)));
+ }finally{fs.renameSync=rename;fs.rmSync(root,{recursive:true,force:true})}
+});
+test('MCP writer rejects concurrent cooperative writer and concurrent snapshot change',()=>{
+ const {addMcpServer}=require('../src/install'),root=tmp(),file=path.join(root,'mcp_config.json'),write=fs.writeFileSync;
+ try{fs.writeFileSync(file,'{}');fs.writeFileSync(file+'.santri-lock','locked');assert.throws(()=>addMcpServer(file),/sedang ditulis/);assert.equal(fs.readFileSync(file,'utf8'),'{}');fs.unlinkSync(file+'.santri-lock');
+  fs.writeFileSync=(target,...args)=>{const r=write(target,...args);if(String(target).includes('.tmp-'))write(file,'{"concurrent":true}');return r};assert.throws(()=>addMcpServer(file),/berubah saat menulis/);assert.equal(fs.readFileSync(file,'utf8'),'{"concurrent":true}');assert.equal(fs.readFileSync(file+'.bak','utf8'),'{}');
+ }finally{fs.writeFileSync=write;fs.rmSync(root,{recursive:true,force:true})}
+});
 test('scope is strictly validated', () => {
   for (const bad of ['', 'Project', 'both', null, undefined, 'global ']) assert.throws(() => configStatus(bad, tmp(), tmp()), /Scope invalid/);
   assert.equal(configStatus('global', tmp(), tmp()).scope, 'global');

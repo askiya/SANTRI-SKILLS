@@ -95,40 +95,64 @@ function readJson(file) {
 const { isDeepStrictEqual } = require('node:util');
 const localEntry = { command: process.execPath, args: [path.resolve(__dirname, '../bin/cli.js'), 'mcp-serve'] };
 const isOurs = (e) => isDeepStrictEqual(e, SERVER_ENTRY) || isDeepStrictEqual(e, localEntry);
-function addMcpServer(file, entry = SERVER_ENTRY, name = SERVER_NAME, { preset = null } = {}) {
-  if (preset) {
-    if (preset !== 'react-bits' || name !== 'shadcn' || !isDeepStrictEqual(entry, SHADCN_ENTRY)) throw new Error('Preset invalid.');
-    for (const target of [file, file + '.bak', mcpMarkerFile(file)]) {
-      assertSafePath(target, path.dirname(file));
-      if (fs.existsSync(target) && fs.lstatSync(target).nlink !== 1) throw new Error('Hardlink config/backup/marker ditolak.');
+// Cooperative exclusive lock plus pre-rename snapshot check: never merge stale data.
+function safeMcpFile(file) {
+  if(typeof file!=='string'||!path.isAbsolute(file)||file.split(/[\\/]/).includes('..')||/[\x00-\x1f]/.test(file)||/^\\\\/.test(file)||process.platform==='win32'&&file.slice(2).includes(':'))throw new Error('Path config invalid.');
+  assertSafePath(file,path.dirname(file));
+  let stat;try{stat=fs.lstatSync(file)}catch(e){if(e.code!=='ENOENT')throw e}
+  if(stat&&!stat.isFile())throw new Error('Config/backup/marker wajib file regular.');
+  if(stat&&stat.nlink!==1)throw new Error('Hardlink config/backup/marker ditolak.');
+}
+function mutateMcp(file, change) {
+  file=path.resolve(file);safeMcpFile(file);safeMcpFile(file+'.bak');safeMcpFile(file+'.santri-lock');
+  fs.mkdirSync(path.dirname(file),{recursive:true});safeMcpFile(file);
+  const lock=file+'.santri-lock';let fd;
+  try{fd=fs.openSync(lock,'wx',0o600)}catch(e){if(e.code==='EEXIST')throw new Error('Config sedang ditulis. Coba lagi; file tidak diubah.');throw e}
+  let backup=null;
+  try{
+    const original=fs.existsSync(file)?fs.readFileSync(file):null;
+    let cfg={};try{if(original)cfg=JSON.parse(original.toString('utf8'))}catch{throw new Error(`${file} bukan JSON valid. File tidak diubah.`)}
+    if(!cfg||typeof cfg!=='object'||Array.isArray(cfg))throw new Error('Root config harus object. File tidak diubah.');
+    if(Object.hasOwn(cfg,'mcpServers')&&(!cfg.mcpServers||typeof cfg.mcpServers!=='object'||Array.isArray(cfg.mcpServers)))throw new Error('mcpServers harus object. File tidak diubah.');
+    const before=JSON.stringify(cfg);change(cfg);
+    if(JSON.stringify(cfg)!==before){
+      if(original){
+        backup=file+'.bak';if(fs.existsSync(backup))backup+=`-${crypto.randomUUID()}`;safeMcpFile(backup);
+        fs.writeFileSync(backup,original,{flag:'wx',mode:0o600});
+      }
+      const temp=`${file}.tmp-${crypto.randomUUID()}`;let staged=false;
+      try{
+        fs.writeFileSync(temp,JSON.stringify(cfg,null,2)+'\n',{flag:'wx',mode:0o600});staged=true;
+        safeMcpFile(file);safeMcpFile(temp);
+        const current=fs.existsSync(file)?fs.readFileSync(file):null;
+        if(original? !current||!current.equals(original):current!==null)throw new Error('Config berubah saat menulis. File tidak ditimpa; backup dipertahankan.');
+        fs.renameSync(temp,file);staged=false;
+        safeMcpFile(file);if(!isDeepStrictEqual(JSON.parse(fs.readFileSync(file,'utf8')),cfg))throw new Error('Read-back config gagal; backup dipertahankan.');
+      }finally{if(staged)fs.rmSync(temp,{force:true})}
     }
-    if (fs.existsSync(file+'.bak')) throw new Error('Backup mcp_config.json.bak sudah ada; pindahkan manual sebelum memasang. File tidak diubah.');
-  }
-  const config = readJson(file);
-  // Shape check BEFORE any backup/write: a non-object root or non-object mcpServers
-  // would otherwise be silently replaced and the user's data lost.
-  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error(`${file} bukan object JSON (root harus object). File tidak diubah.`);
-  if (Object.hasOwn(config, 'mcpServers') && (!config.mcpServers || typeof config.mcpServers !== 'object' || Array.isArray(config.mcpServers))) throw new Error(`${file}: mcpServers harus object. File tidak diubah.`);
-  const existing = config.mcpServers && config.mcpServers[name];
-  const same = JSON.stringify(existing) === JSON.stringify(entry);
-  // Website presets never adopt an entry we did not install, even an identical one.
-  if (preset && existing && !websiteOwned(file, name, existing)) throw new Error(`MCP '${name}' sudah ada di ${file}. Hapus manual dulu, file tidak diubah.`);
-  if (!preset && existing && !same && !(name === SERVER_NAME && isOurs(existing))) {
-    throw new Error(`MCP '${name}' sudah ada di ${file} dengan konfigurasi lain. Hapus manual dulu, file tidak diubah.`);
-  }
-  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
-  config.mcpServers = { ...(config.mcpServers || {}), [name]: entry };
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.tmp-${process.pid}`;
-  try {
-    fs.writeFileSync(temp, JSON.stringify(config, null, 2) + '\n', { flag: 'wx' });
-    fs.renameSync(temp, file);
-  } finally { fs.rmSync(temp, { force: true }); }
-  if (preset) {
-    const marker = mcpMarkerFile(file);
-    let meta = {}; try { meta = JSON.parse(fs.readFileSync(marker, 'utf8')) || {} } catch { meta = {} }
-    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) meta = {};
-    atomicJson(marker, { ...meta, servers: { ...(meta.servers || {}), [name]: preset }, updatedAt: new Date().toISOString() });
+    Object.defineProperty(cfg,'backup',{value:backup,enumerable:false});return cfg;
+  }catch(e){if(backup)e.backup=backup;throw e}finally{fs.closeSync(fd);fs.unlinkSync(lock)}
+}
+function mergeMcpEntries(file, entries) {
+  return mutateMcp(file,cfg=>{
+    const bag=cfg.mcpServers||{},collisions=Object.keys(entries).filter(n=>Object.hasOwn(bag,n));
+    if(collisions.length)throw new Error(`MCP sudah ada: ${collisions.join(', ')}. File tidak diubah.`);
+    cfg.mcpServers={...bag,...entries};
+  });
+}
+function addMcpServer(file, entry = SERVER_ENTRY, name = SERVER_NAME, { preset = null } = {}) {
+  if(preset&&(preset!=='react-bits'||name!=='shadcn'||!isDeepStrictEqual(entry,SHADCN_ENTRY)))throw new Error('Preset invalid.');
+  if(preset)safeMcpFile(mcpMarkerFile(file));
+  const config=mutateMcp(file,cfg=>{
+    const existing=cfg.mcpServers&&cfg.mcpServers[name];
+    if(preset&&existing&&!websiteOwned(file,name,existing))throw new Error(`MCP '${name}' sudah ada di ${file}. Hapus manual dulu, file tidak diubah.`);
+    if(!preset&&existing&&!isDeepStrictEqual(existing,entry)&&!(name===SERVER_NAME&&isOurs(existing)))throw new Error(`MCP '${name}' sudah ada di ${file} dengan konfigurasi lain. Hapus manual dulu, file tidak diubah.`);
+    if(!isDeepStrictEqual(existing,entry))cfg.mcpServers={...(cfg.mcpServers||{}),[name]:entry};
+  });
+  if(preset){
+    const marker=mcpMarkerFile(file);let meta={};try{meta=JSON.parse(fs.readFileSync(marker,'utf8'))||{}}catch{}
+    if(!meta||typeof meta!=='object'||Array.isArray(meta))meta={};
+    if(meta.servers?.[name]!==preset)atomicJson(marker,{...meta,servers:{...(meta.servers||{}),[name]:preset},updatedAt:new Date().toISOString()});
   }
   return config;
 }
@@ -156,12 +180,11 @@ function removeInstalled({kind,id,skillsDir,mcpFile}) {
     const cfg=readJson(mcpFile),entry=cfg.mcpServers&&cfg.mcpServers[id];
     if(!entry)return {removed:false};
     if(!(id===SERVER_NAME&&isOurs(entry))&&!websiteOwned(mcpFile,id,entry))throw new Error('MCP bukan milik SantriHub atau konfigurasi tidak dikenal; tidak dihapus.');
-    if(id==='shadcn'){const marker=mcpMarkerFile(mcpFile);assertSafePath(marker,path.dirname(mcpFile));if(fs.lstatSync(marker).nlink!==1)throw new Error('Hardlink marker ditolak.');}
-    // Preserve install backup; use collision-resistant backup for preset uninstall.
-    const saved=id==='shadcn'&&fs.existsSync(backup)?`${backup}-${crypto.randomBytes(8).toString('hex')}`:backup;
-    fs.copyFileSync(mcpFile,saved,id==='shadcn'?fs.constants.COPYFILE_EXCL:0);delete cfg.mcpServers[id];atomicJson(mcpFile,cfg);
+    if(id==='shadcn'){const marker=mcpMarkerFile(mcpFile);safeMcpFile(marker);}
+    // Install backups are never overwritten: each effective write gets its own unique backup.
+    const written=mutateMcp(mcpFile,next=>{if(next.mcpServers)delete next.mcpServers[id]});
     if(id==='shadcn'){const marker=mcpMarkerFile(mcpFile),meta=JSON.parse(fs.readFileSync(marker,'utf8'));delete meta.servers[id];atomicJson(marker,meta);}
-    return {removed:true,kind,id,backup:saved};
+    return {removed:true,kind,id,backup:written.backup};
   }
   throw new Error('Jenis uninstall invalid.');
 }
@@ -223,4 +246,4 @@ function configStatus(scope, cwd = process.cwd(), home = os.homedir(), override 
   };
 }
 
-module.exports = { SHADCN_ENTRY, removeInstalled, MARKER, SERVER_NAME, SERVER_ENTRY, skillTargets, mcpConfigPath, installSkills, uninstallSkills, addMcpServer, removeMcpServer, installedSkills, configStatus };
+module.exports = { SHADCN_ENTRY, removeInstalled, mergeMcpEntries, MARKER, SERVER_NAME, SERVER_ENTRY, skillTargets, mcpConfigPath, installSkills, uninstallSkills, addMcpServer, removeMcpServer, installedSkills, configStatus };

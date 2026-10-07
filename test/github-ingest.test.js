@@ -47,6 +47,16 @@ test('GitHub redirect count, MIME, declared and streamed response caps fail clos
   await assert.rejects(boundedFetch('https://api.github.com/a',{json:true,fetcher:async()=>new Response('{}',{headers:{'content-type':'text/html'}})}),/JSON/);
   for(const headers of [{},{'content-length':String(513*1024)}]) await assert.rejects(boundedFetch('https://raw.githubusercontent.com/a/b/main/a',{fetcher:async()=>new Response('x'.repeat(513*1024),{headers})}),/terlalu besar/);
 });
+test('oversized GitHub tree is tagged, without archive fallback',async()=>{
+ for(const tree of [{truncated:true,tree:[]},{tree:Array.from({length:MAX_TREE+1},(_,i)=>({path:String(i)}))}]){
+  const calls=[];await assert.rejects(previewGithub('https://github.com/fixture/repo/tree/main',{fetcher:async url=>{calls.push(String(url));return json(tree)}}),e=>e.tooLarge===true);
+  assert.equal(calls.length,1);
+ }
+ for(const headers of [{},{'content-length':String(4*1024*1024+1)}]){
+  const calls=[];await assert.rejects(previewGithub('https://github.com/fixture/repo/tree/main',{fetcher:async url=>{calls.push(String(url));return new Response(' '.repeat(4*1024*1024+1),{headers:{'content-type':'application/json',...headers}})}}),e=>e.tooLarge===true);
+  assert.equal(calls.length,1);
+ }
+});
 test('GitHub oversized tree, unsafe tree path, duplicate skills and malformed MCP rejected',async()=>{
   for(const tree of [{truncated:true,tree:[]},{tree:Array.from({length:MAX_TREE+1},(_,i)=>({path:String(i)}))},{tree:[{path:'../bad'}]}])await assert.rejects(previewGithub('https://github.com/fixture/repo/tree/main',{fetcher:async()=>json(tree)}));
   for(const files of [{'a/demo/SKILL.md':'a','b/demo/SKILL.md':'b'},{'mcp_config.json':'{"mcpServers":[]}'}])await assert.rejects(previewGithub('https://github.com/fixture/repo',{fetcher:fixture(files).fetcher}));
@@ -67,7 +77,7 @@ test('streaming archive rejects traversal, links and decompression bombs',async(
  const tar=entries=>{const blocks=[];for(const [name,type='0',data=Buffer.from('safe')]of entries){const h=Buffer.alloc(512);h.write(name);h.write(data.length.toString(8).padStart(11,'0')+'\0',124);h[156]=type.charCodeAt(0);blocks.push(h,data,Buffer.alloc((512-data.length%512)%512));}return zlib.gzipSync(Buffer.concat([...blocks,Buffer.alloc(1024)]));};
  for(const name of ['repo/../bad','/repo/bad','repo/C:bad','repo/a\\bad'])await assert.rejects(archiveEntries(tar([[name]])),/tidak aman/);
  for(const type of ['1','2'])await assert.rejects(archiveEntries(tar([['repo/file',type]])),/ditolak/);
- await assert.rejects(archiveEntries(zlib.gzipSync(Buffer.alloc(97*1024*1024))),/setelah dekompresi melebihi 96 MB/);
+ await assert.rejects(archiveEntries(zlib.gzipSync(Buffer.alloc(97*1024*1024))),e=>e.tooLarge===true&&/setelah dekompresi melebihi 96 MB/.test(e.message));
 });
 test('streaming archive scans large skipped media but retains only bounded relevant files',async()=>{
  const {archiveEntries}=require('../src/github-import'),zlib=require('node:zlib'),blocks=[];
@@ -82,7 +92,15 @@ test('archive redirects reject foreign destinations before second fetch',async()
 test('rate-limited preview still enforces compressed archive ceiling',async()=>{
  const rate=new Response(JSON.stringify({message:'API rate limit exceeded'}),{status:403,headers:{'content-type':'application/json','x-ratelimit-remaining':'0'}});
  const fetcher=async url=>String(url).startsWith('https://api.github.com/')?rate.clone():new Response(require('node:zlib').gzipSync(Buffer.alloc(16)),{headers:{'content-length':String(33*1024*1024)}});
- await assert.rejects(previewGithub('https://github.com/a/b',{fetcher}),/terkompresi melebihi 32 MB/);
+ await assert.rejects(previewGithub('https://github.com/a/b',{fetcher}),e=>e.tooLarge===true&&/terkompresi melebihi 32 MB/.test(e.message));
+});
+test('archive structure tags only parser link/type failures, not network or 404',async()=>{
+ const rate=()=>new Response(JSON.stringify({message:'API rate limit exceeded'}),{status:403,headers:{'content-type':'application/json','x-ratelimit-remaining':'0'}});
+ for(const type of ['1','2','3']){
+  const h=Buffer.alloc(512);h.write('repo/file');h.write('00000000000\0',124);h[156]=type.charCodeAt(0);
+  await assert.rejects(previewGithub('https://github.com/a/b/tree/main',{fetcher:async url=>String(url).startsWith('https://api.github.com/')?rate():new Response(require('node:zlib').gzipSync(Buffer.concat([h,Buffer.alloc(1024)])))}),e=>e.unscannable===true&&/ditolak/.test(e.message));
+ }
+ for(const failure of ['network','404'])await assert.rejects(previewGithub('https://github.com/a/b/tree/main',{fetcher:async url=>{if(String(url).startsWith('https://api.github.com/'))return rate();if(failure==='network')throw new Error('getaddrinfo ENOTFOUND');return new Response('{}',{status:404});}}),e=>!e.unscannable&&!e.tooLarge);
 });
 test('duplicate skill mirrors across client dirs collapse to the preferred .agents copy',async()=>{
  const snap=await previewGithub('https://github.com/fixture/repo',{fetcher:fixture({'.agents/skills/demo/SKILL.md':'---\nname: Demo\n---\ncanonical','.grok/skills/demo/SKILL.md':'mirror','plugin/skills/demo/SKILL.md':'mirror','tests/oracle/skills/demo/SKILL.md':'fixture'}).fetcher});

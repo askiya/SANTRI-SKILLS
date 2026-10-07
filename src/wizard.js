@@ -1,13 +1,39 @@
 'use strict';
+// One entrance per menu change; replaying exit and entrance looked like a glitch.
+const instantGo=go,motionPreference=matchMedia('(prefers-reduced-motion: reduce)');
+let navigationAnimations=[];
+function cancelNavigation(){navigationAnimations.forEach(a=>a.cancel());navigationAnimations=[]}
+go=function(page){
+  if(!PAGES[page])page='home';
+  const target=$('#page-'+page),current=Object.keys(PAGES).map(p=>$('#page-'+p)).find(el=>!el.hidden);
+  cancelNavigation();
+  if(current===target){instantGo(page);return}
+  instantGo(page);
+  Object.keys(PAGES).forEach(p=>{$('#page-'+p).inert=p!==page});
+  if(motionPreference.matches||document.body.classList.contains('auth-locked'))return;
+  navigationAnimations=[target.animate([{opacity:0,transform:'translateY(12px)',filter:'blur(4px)'},{opacity:1,transform:'none',filter:'blur(0)'}],{duration:480,easing:'cubic-bezier(.22,.8,.3,1)'})];
+};
+motionPreference.addEventListener('change',()=>{if(motionPreference.matches)cancelNavigation()});
 const chooser=document.querySelector('#add-chooser'),wizard=document.querySelector('#install-wizard');
 const w=id=>document.querySelector('#'+id);
 const REACT_BITS_URL='https://reactbits.dev/get-started/mcp';
+function closeDialog(dialog,value=dialog.returnValue){
+  if(!dialog.open||dialog.classList.contains('dialog-closing'))return;
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches){dialog.close(value);return}
+  dialog.classList.add('dialog-closing');
+  if(dialog===wizard)wizardEpoch++;
+  setTimeout(()=>{dialog.classList.remove('dialog-closing');if(dialog.open)dialog.close(value)},400);
+}
+for(const dialog of [chooser,wizard,w('uninstall-dialog'),w('restart-confirm')]){
+  dialog.addEventListener('cancel',event=>{event.preventDefault();if(dialog.getAttribute('aria-busy')!=='true')closeDialog(dialog,'cancel')});
+}
+w('restart-confirm').querySelector('form').addEventListener('submit',event=>{event.preventDefault();closeDialog(w('restart-confirm'),event.submitter?.value||'cancel')});
 let wizardSource='github',wizardKind='skills',wizardPreview=null,wizardStep=0,pollTimer=null,wizardBusy=false,wizardEpoch=0,proofEpoch=0,proofVerified=false;
 function stopPoll(){clearTimeout(pollTimer);pollTimer=null;proofEpoch++}
 function friendlyError(error){
   const message=String(error?.message||'Operasi gagal.');
-  if(/github\.com|URL|HTTPS/i.test(message)&&!/fetch|connect|timeout/i.test(message))return 'Gunakan URL HTTPS github.com yang valid, lalu preview ulang.';
-  if(/fetch|connect|timeout|ENOTFOUND|ECONN|alamat|private|loopback|DNS|IP|network/i.test(message))return 'Repository belum dapat diakses dengan aman. Periksa URL dan koneksi, lalu coba Preview lagi.';
+  if(/^URL GitHub|^Gunakan URL HTTPS/i.test(message))return 'Gunakan URL HTTPS github.com yang valid, lalu preview ulang.';
+  if(/\b(?:fetch|connect(?:ion)?|timeout|ENOTFOUND|ECONN\w*|alamat|private|loopback|DNS|IP|network)\b/i.test(message))return 'Repository belum dapat diakses dengan aman. Periksa URL dan koneksi, lalu coba Preview lagi.';
   if(/preview|expired|kedaluwarsa|berubah|hash/i.test(message))return 'Preview tidak lagi valid. Kembali ke Configuration dan preview ulang sebelum memasang.';
   return message.replace(/https?:\/\/\S+|\b(?:\d{1,3}\.){3}\d{1,3}\b/g,'[alamat]').slice(0,220);
 }
@@ -17,8 +43,8 @@ function syncWizard(){
   const count=selectedIds().length,total=document.querySelectorAll('#wizard-results input').length;
   w('wizard-count').textContent=`${count} dari ${total} dipilih`;
   w('wizard-selection').hidden=!total;
-  wizard.querySelectorAll('button,input').forEach(el=>el.disabled=wizardBusy);
-  w('wizard-next').disabled=wizardBusy||(wizardStep===0&&(!wizardPreview||!count))||(wizardStep===1&&(!wizardPreview||!count||!w('wizard-trust').checked));
+  wizard.querySelectorAll('button,input').forEach(el=>el.disabled=wizardBusy||wizard.classList.contains('dialog-closing'));
+  w('wizard-next').disabled=wizardBusy||wizard.classList.contains('dialog-closing')||(wizardStep===0&&(!wizardPreview||!count))||(wizardStep===1&&(!wizardPreview||!count||!w('wizard-trust').checked));
   w('wizard-back').hidden=wizardStep!==1;
   w('wizard-cancel').hidden=wizardStep===3;
   w('wizard-all').disabled=wizardBusy||count===total;
@@ -27,45 +53,79 @@ function syncWizard(){
 }
 function setWizardBusy(value,label=''){wizardBusy=value;w('wizard-loading').hidden=!value;w('wizard-loading-label').textContent=label;syncWizard()}
 function wizardState(step,message='',focus=true){
+  const previous=wizardStep,body=w('wizard-body'),viewport=wizard.querySelector('.wizard-viewport');
+  const animate=wizard.open&&step!==previous&&!matchMedia('(prefers-reduced-motion: reduce)').matches;
+  viewport.querySelectorAll('.wizard-exit').forEach(el=>el.remove());
+  body.classList.remove('wizard-enter','wizard-forward','wizard-backward');
+  viewport.style.height='auto';
+  const oldHeight=body.offsetHeight,epoch=wizardEpoch;
+  let outgoing;
+  if(animate){
+    outgoing=body.cloneNode(true);outgoing.removeAttribute('id');outgoing.querySelectorAll('[id]').forEach(el=>{el.classList.add(el.id);el.removeAttribute('id')});outgoing.querySelectorAll('[name]').forEach(el=>el.removeAttribute('name'));outgoing.querySelectorAll('input,button,form').forEach(el=>el.disabled=true);outgoing.inert=true;outgoing.setAttribute('aria-hidden','true');outgoing.className='wizard-body wizard-exit';viewport.append(outgoing);viewport.style.height=oldHeight+'px';
+  }
   wizardStep=step;w('wizard-stage').textContent=['Configuration','Activation','Verification','Done'][step];feedback(message);
   w('wizard-next').textContent=['Activation','Install terkonfirmasi','Selesai tanpa klaim runtime','Tutup'][step];
   for(const [id,index] of [['wizard-config',0],['wizard-trust-row',1],['wizard-verify',2],['wizard-success',3]])w(id).hidden=step!==index;
-  wizard.querySelectorAll('.wizard-stepper li').forEach((el,index)=>{const completed=index<step&&(index!==2||proofVerified);el.classList.toggle('completed',completed);index===step?el.setAttribute('aria-current','step'):el.removeAttribute('aria-current');el.querySelector('span').textContent=completed?'✓':String(index+1)});
-  w('wizard-body').scrollTop=0;syncWizard();if(focus&&wizard.open)w('wizard-stage').focus();
+  wizard.querySelectorAll('.wizard-stepper li').forEach((el,index)=>{const complete=index<step&&(index!==2||proofVerified),active=index===step;el.classList.toggle('completed',complete);el.classList.toggle('complete',complete);el.classList.toggle('active',active);el.classList.toggle('inactive',!complete&&!active);active?el.setAttribute('aria-current','step'):el.removeAttribute('aria-current')});
+  viewport.scrollTop=0;syncWizard();
+  if(animate){
+    const direction=step>previous?'wizard-forward':'wizard-backward';
+    body.classList.add('wizard-enter',direction);const nextHeight=body.offsetHeight;
+    body.getBoundingClientRect();
+    requestAnimationFrame(()=>{if(epoch!==wizardEpoch)return;outgoing.classList.add(step>previous?'wizard-exit-forward':'wizard-exit-backward');viewport.style.height=nextHeight+'px';body.classList.remove(direction)});
+    setTimeout(()=>{outgoing.remove();if(epoch===wizardEpoch){body.classList.remove('wizard-enter');viewport.style.height='auto';viewport.scrollTop=0}},400);
+  }
+  if(focus&&wizard.open)w('wizard-stage').focus();
 }
-function invalidatePreview(){wizardPreview=null;w('wizard-results').replaceChildren();w('wizard-registry').hidden=true;w('wizard-trust').checked=false;w('wizard-trust-hint').textContent='Install terkonfirmasi aktif setelah kotak ini dicentang.';syncWizard()}
-// Website mode is a fixed allowlist preset: no arbitrary URL, no page fetch, no command run here.
+function invalidatePreview(){wizardPreview=null;w('wizard-registry').querySelectorAll('details').forEach(el=>el.open=false);w('wizard-results').replaceChildren();w('wizard-registry').hidden=true;w('wizard-trust').checked=false;w('wizard-trust-hint').textContent='Install terkonfirmasi aktif setelah kotak ini dicentang.';syncWizard()}
+// Known-source routing only: exact React Bits aliases map to the documented shadcn preset. No generic scrape, no arbitrary URL execution.
+function reactBitsSource(value){
+  try{
+    const u=new URL(String(value).trim());
+    if(u.protocol!=='https:'||u.username||u.password||u.port||u.search||u.hash)return null;
+    const host=u.hostname.toLowerCase(),p=u.pathname.replace(/\/$/,'');
+    if(host==='reactbits.dev'&&(p===''||p==='/get-started/mcp'))return REACT_BITS_URL;
+    if((host==='github.com'||host==='www.github.com')&&/^\/davidhdev\/react-bits(?:\.git)?$/i.test(p))return REACT_BITS_URL;
+  }catch{}
+  return null;
+}
 function applySource(){
   const website=wizardSource==='website';invalidatePreview();feedback();
-  w('wizard-url').readOnly=website;w('wizard-url').value=website?REACT_BITS_URL:'';
-  w('wizard-source-note').textContent=website?'Preset resmi React Bits saja. Halaman web tidak diambil dan tidak ada perintah dijalankan saat preview.':'GitHub: preview tanpa menjalankan script repository.';
+  w('wizard-url').readOnly=false;w('wizard-url').value=website?REACT_BITS_URL:'';
+  w('wizard-source-note').textContent=website?'Sumber dikenal saja: https://reactbits.dev atau repo https://github.com/DavidHDev/react-bits. Halaman web tidak diambil dan tidak ada perintah dijalankan saat preview.':'GitHub: preview tanpa menjalankan script repository. URL React Bits resmi otomatis memakai preset shadcn MCP.';
 }
 for(const value of ['github','website'])w('wizard-source-'+value).onchange=()=>{if(wizardBusy)return;wizardSource=value;applySource()};
 function openWizard(kind){
-  if(wizardBusy)return;wizardEpoch++;wizardKind=kind;stopPoll();proofVerified=false;chooser.close();invalidatePreview();
+  if(wizardBusy||wizard.classList.contains('dialog-closing'))return;wizardEpoch++;wizardKind=kind;stopPoll();proofVerified=false;chooser.close();invalidatePreview();
   wizardSource='github';w('wizard-source-github').checked=true;applySource();w('wizard-source-choice').hidden=kind!=='mcp';
   w('wizard-kind').textContent=(kind==='skills'?'SKILLS':'MCP SERVERS')+' · GLOBAL';w('wizard-title').textContent=kind==='skills'?'Tambah Skills':'Tambah MCP Servers';
   w('wizard-proof').textContent='Belum ada callback.';w('wizard-proof').classList.remove('proof-ok');wizardState(0,'',false);wizard.showModal();w('wizard-url').focus();
 }
-function closeWizard(){if(wizardBusy)return;wizard.close();w('add-item').focus()}
-w('add-item').onclick=()=>chooser.showModal();document.querySelectorAll('[data-add-kind]').forEach(b=>b.onclick=()=>openWizard(b.dataset.addKind));w('close-chooser').onclick=()=>chooser.close();
+function closeWizard(){if(wizardBusy)return;closeDialog(wizard)}
+w('add-item').onclick=()=>chooser.showModal();document.querySelectorAll('[data-add-kind]').forEach(b=>b.onclick=()=>openWizard(b.dataset.addKind));w('close-chooser').onclick=()=>closeDialog(chooser);
 w('wizard-close').onclick=closeWizard;w('wizard-cancel').onclick=closeWizard;
 wizard.addEventListener('cancel',e=>{if(wizardBusy)e.preventDefault()});wizard.addEventListener('close',()=>{wizardEpoch++;stopPoll();w('add-item').focus()});
 w('wizard-url').addEventListener('input',()=>{if(!wizardBusy){invalidatePreview();feedback()}});
 w('wizard-results').addEventListener('change',()=>{w('wizard-trust').checked=false;syncWizard()});w('wizard-trust').addEventListener('change',syncWizard);
 w('wizard-registry-copy').onclick=async()=>{try{await navigator.clipboard.writeText(w('wizard-registry-json').textContent);feedback('Registry disalin. Tempel/merge ke components.json pada setiap project.')}catch{feedback('Clipboard ditolak. Salin blok registry secara manual.',true)}};
 for(const [id,checked] of [['wizard-all',true],['wizard-none',false]])w(id).onclick=()=>{if(wizardBusy)return;document.querySelectorAll('#wizard-results input').forEach(el=>el.checked=checked);w('wizard-trust').checked=false;syncWizard()};
+function writePanel(state,detail=''){
+  const panel=w('wizard-write-panel'),label={awaiting:'Menunggu persetujuan',writing:'Menulis ke disk…',saved:'Tersimpan & dibaca ulang',failed:'Gagal — periksa pesan error'}[state];
+  panel.dataset.state=state;w('wizard-write-state').dataset.state=state;w('wizard-write-state').textContent=label;
+  panel.querySelectorAll('[data-write-step]').forEach(el=>{const order=['consent','writing','saved'],index=order.indexOf(el.dataset.writeStep),now=state==='awaiting'?0:state==='writing'?1:2;el.classList.toggle('active',index===now&&state!=='failed');el.classList.toggle('done',state==='saved'?index<=2:index<now);el.classList.toggle('failed',state==='failed'&&index===1)});
+  w('wizard-write-detail').textContent=detail;
+}
 w('wizard-back').onclick=()=>{if(!wizardBusy&&wizardStep===1)wizardState(0)};
 w('wizard-source-form').onsubmit=async event=>{
   event.preventDefault();if(wizardBusy||wizardStep!==0)return;
   const epoch=wizardEpoch;invalidatePreview();feedback();setWizardBusy(true,'Membaca repository dan menyiapkan preview…');
   try{
-    const website=wizardKind==='mcp'&&wizardSource==='website';
-    const preview=website?await post('/api/website/preview',{url:w('wizard-url').value,scope:'global'}):await post('/api/github/preview',{url:w('wizard-url').value.trim(),scope:'global'});if(epoch!==wizardEpoch||!wizard.open)return;
+    const entered=w('wizard-url').value.trim(),website=wizardKind==='mcp'&&(wizardSource==='website'||reactBitsSource(entered));
+    const preview=website?await post('/api/website/preview',{url:entered,scope:'global'}):await post('/api/github/preview',{url:entered,scope:'global'});if(epoch!==wizardEpoch||!wizard.open)return;
     wizardPreview=preview;const rows=website?[{id:preview.name,path:preview.target}]:wizardKind==='skills'?preview.skills.map(s=>({id:s.id,path:s.path})):preview.mcp.flatMap(m=>m.names.map(id=>({id,path:m.path})));
     if(website){w('wizard-registry').hidden=false;w('wizard-registry-json').textContent=JSON.stringify(preview.registry,null,2);w('wizard-preset-config').textContent=JSON.stringify({mcpServers:{shadcn:preview.entry}},null,2);w('wizard-trust-hint').textContent=preview.warning;}
     w('wizard-results').innerHTML=rows.map(s=>`<label class="item"><input type="checkbox" value="${esc(s.id)}"><span><strong>${esc(s.id)}</strong><small>${esc(s.path)}</small></span></label>`).join('');
-    feedback(rows.length?'Preview siap. Pilih item untuk melanjutkan.':'Tidak ada item jenis ini. Coba repository lain.');
+    feedback((website?preview.recognition+' · ':'')+(rows.length?'Preview siap. Pilih item untuk melanjutkan.':['empty','too-large','unscannable'].includes(preview.classification)?preview.note:'Tidak ada item jenis ini. Coba repository lain.'));
   }catch(e){if(epoch===wizardEpoch)feedback(friendlyError(e),true)}finally{if(epoch===wizardEpoch)setWizardBusy(false)}
 };
 async function pollProof(epoch=proofEpoch){
@@ -89,18 +149,19 @@ w('wizard-restart-ide').onclick=()=>{if(!wizardBusy){w('restart-confirm').return
 w('wizard-next').onclick=async()=>{
   if(wizardBusy||w('wizard-next').disabled)return;const epoch=wizardEpoch;
   try{
-    if(wizardStep===0){if(!wizardPreview||!selectedIds().length)return;w('wizard-review').textContent=`${selectedIds().length} ${wizardKind==='skills'?'Skills':'MCP Servers'} dipilih · ${selectedIds().join(', ')}`;w('wizard-targets').textContent=wizardPreview.source==='website-preset'?'Target MCP global:\n'+wizardPreview.target:wizardKind==='skills'?'Target Skills global:\n'+wizardPreview.targets.skillsDirs.join('\n'):'Target MCP global:\n'+wizardPreview.targets.mcpFile;wizardState(1,wizardPreview.warning||'Hanya repo dipercaya. Semua workspace terdampak.');return}
+    if(wizardStep===0){if(!wizardPreview||!selectedIds().length)return;w('wizard-review').textContent=`${selectedIds().length} ${wizardKind==='skills'?'Skills':'MCP Servers'} dipilih · ${selectedIds().join(', ')}`;w('wizard-targets').textContent=wizardPreview.source==='website-preset'?'Target MCP global:\n'+wizardPreview.target:wizardKind==='skills'?'Target Skills global:\n'+wizardPreview.targets.skillsDirs.join('\n'):'Target MCP global:\n'+wizardPreview.targets.mcpFile;const website=wizardPreview.source==='website-preset';w('wizard-write-panel').hidden=!website;if(website){w('wizard-write-snippet').textContent=JSON.stringify({mcpServers:Object.fromEntries(selectedIds().map(id=>[id,wizardPreview.entry]))},null,2);writePanel('awaiting','Hanya entri terpilih akan digabung. Config lain dan secret tidak ditampilkan.')}wizardState(1,wizardPreview.warning||'Hanya repo dipercaya. Semua workspace terdampak.');return}
     if(wizardStep===1){
-      if(!wizardPreview||!w('wizard-trust').checked)return;setWizardBusy(true,'Memasang pilihan ke target global…');feedback();const ids=selectedIds(),p=wizardPreview;
-      if(p.source==='website-preset')await post('/api/website/install',{scope:'global',url:p.url,previewId:p.previewId,confirm:true,confirmGlobal:true,consentNetworkExecution:true});
-      else await post('/api/github/install',{scope:'global',confirm:true,confirmGlobal:true,previewId:p.previewId,previewHash:p.previewHash,sourceUrl:p.sourceUrl,skillIds:wizardKind==='skills'?ids:[],mcpNames:wizardKind==='mcp'?ids:[]});
+      if(!wizardPreview||!w('wizard-trust').checked)return;setWizardBusy(true,'Memasang pilihan ke target global…');feedback();const ids=selectedIds(),p=wizardPreview;let result;
+      if(p.source==='website-preset'){writePanel('writing','Request aktif. Server menulis atomik lalu membaca ulang hasil.');result=await post('/api/website/install',{scope:'global',url:p.url,previewId:p.previewId,confirm:true,confirmGlobal:true,consentNetworkExecution:true});}
+      else result=await post('/api/github/install',{scope:'global',confirm:true,confirmGlobal:true,previewId:p.previewId,previewHash:p.previewHash,sourceUrl:p.sourceUrl,skillIds:wizardKind==='skills'?ids:[],mcpNames:wizardKind==='mcp'?ids:[]});
       if(epoch!==wizardEpoch)return;
+      if(p.source==='website-preset')writePanel('saved',`Target: ${result.config}\n${result.backup?'Backup: '+result.backup:'File baru; tidak ada config lama untuk dibackup.'}\nRead-back JSON berhasil. Runtime IDE belum diverifikasi.`);
       // Installation already committed: never offer another install if status refresh fails.
-      wizardState(2,'Config ditulis. File bukan bukti IDE memuatnya. Pasang MCP resmi santri-skills untuk callback.');await loadStatus();return;
+      wizardState(2,'Config tersimpan dan dibaca ulang. File bukan bukti IDE memuatnya. Pasang MCP resmi santri-skills untuk callback.');await loadStatus();return;
     }
     if(wizardStep===2){stopPoll();w('wizard-success-proof').textContent=proofVerified?w('wizard-proof').textContent:'Runtime belum diverifikasi. Instalasi disk selesai; belum ada bukti callback bridge.';wizardState(3,'Operasi selesai. Status runtime hanya sesuai bukti callback, bukan keberhasilan menulis config.');return}
     closeWizard();
-  }catch(e){if(epoch===wizardEpoch)feedback(friendlyError(e),true)}finally{if(epoch===wizardEpoch)setWizardBusy(false)}
+  }catch(e){if(epoch===wizardEpoch){if(wizardStep===1&&wizardPreview?.source==='website-preset')writePanel('failed',friendlyError(e));feedback(friendlyError(e),true)}}finally{if(epoch===wizardEpoch)setWizardBusy(false)}
 };
 const uninstallDialog=w('uninstall-dialog');let uninstallItem=null,uninstallBusy=false,uninstallEpoch=0,uninstallTrigger=null;
 function uninstallState(step){uninstallDialog.querySelectorAll('.uninstall-steps li').forEach((el,index)=>index===step?el.setAttribute('aria-current','step'):el.removeAttribute('aria-current'))}
@@ -108,7 +169,7 @@ function askUninstall(kind,id){
   if(uninstallBusy)return;uninstallEpoch++;uninstallItem={kind,id};uninstallTrigger=document.activeElement;w('uninstall-title').textContent=`Uninstall ${kind==='skill'?'Skill':'MCP Server'}`;
   w('uninstall-description').textContent=`Hapus ${id} dari target GLOBAL? Semua workspace terdampak. File/config yang bukan milik SantriHub ditolak. Backup MCP dipertahankan.`;feedback('',false,'uninstall-feedback');uninstallState(0);uninstallDialog.showModal();w('uninstall-cancel').focus();
 }
-function closeUninstall(){if(!uninstallBusy)uninstallDialog.close()}
+function closeUninstall(){if(!uninstallBusy)closeDialog(uninstallDialog)}
 w('uninstall-cancel').onclick=closeUninstall;w('uninstall-close').onclick=closeUninstall;uninstallDialog.addEventListener('cancel',e=>{if(uninstallBusy)e.preventDefault()});
 w('uninstall-confirm').onclick=async()=>{
   if(uninstallBusy||!uninstallItem||w('uninstall-confirm').hidden)return;const epoch=uninstallEpoch;uninstallBusy=true;uninstallState(1);uninstallDialog.setAttribute('aria-busy','true');uninstallDialog.querySelectorAll('button').forEach(el=>el.disabled=true);w('uninstall-loading').hidden=false;feedback('',false,'uninstall-feedback');
@@ -119,6 +180,6 @@ w('uninstall-confirm').onclick=async()=>{
   }catch(e){if(epoch===uninstallEpoch){uninstallState(0);feedback(friendlyError(e),true,'uninstall-feedback')}}finally{if(epoch===uninstallEpoch){uninstallBusy=false;uninstallDialog.setAttribute('aria-busy','false');w('uninstall-loading').hidden=true;uninstallDialog.querySelectorAll('button').forEach(el=>el.disabled=false);w('uninstall-cancel').focus()}}
 };
 uninstallDialog.addEventListener('close',()=>{uninstallEpoch++;uninstallItem=null;w('uninstall-confirm').hidden=false;w('uninstall-cancel').textContent='Batal';const target=uninstallTrigger?.isConnected?uninstallTrigger:w(uninstallTrigger?.closest('#installed-mcp')?'installed-mcp':'installed-skills').closest('.page').querySelector('h1');if(target.tagName==='H1')target.tabIndex=-1;requestAnimationFrame(()=>target.focus())});
-function renderInstalled(){for(const [kind,selector,rows] of [['skill','#installed-skills',lastStatus?.skills||[]],['mcp','#installed-mcp',lastStatus?.mcp.servers||[]]]){const host=document.querySelector(selector);host.replaceChildren(...rows.map(row=>{const el=document.createElement('article');el.className='item';const text=document.createElement('div');text.textContent=(row.id||row.name)+' · '+(kind==='skill'?'File terpasang; IDE belum diketahui':'Config ada; runtime belum diketahui');el.append(text);if(row.managed&&(kind!=='skill'||row.markerValid)){const b=document.createElement('button');b.className='secondary';b.textContent='Uninstall';b.onclick=()=>askUninstall(kind,row.id||row.name);el.append(b)}return el}));if(!rows.length)host.textContent='Belum terpasang.'}}
+function renderInstalled(){for(const [kind,selector,allRows,search] of [['skill','#installed-skills',lastStatus?.skills||[],'#search'],['mcp','#installed-mcp',lastStatus?.mcp.servers||[],'#mcp-search']]){const host=document.querySelector(selector),q=document.querySelector(search).value.trim().toLowerCase(),rows=allRows.filter(row=>(row.id||row.name).toLowerCase().includes(q));host.replaceChildren(...rows.map(row=>{const el=document.createElement('article');el.className='item';const text=document.createElement('div');text.textContent=(row.id||row.name)+' · '+(kind==='skill'?'File terpasang; IDE belum diketahui':'Config ada; runtime belum diketahui');el.append(text);if(row.managed&&(kind!=='skill'||row.markerValid)){const b=document.createElement('button');b.className='secondary';b.textContent='Uninstall';b.onclick=()=>askUninstall(kind,row.id||row.name);el.append(b)}return el}));if(!rows.length)host.textContent=allRows.length?'Tidak ditemukan.':'Belum ada yang terpasang. Buka Kategori untuk memasang.'}}
 const priorRenderStatus=renderStatus;renderStatus=function(){priorRenderStatus();renderInstalled()};
-const priorShowLocked=showLocked;showLocked=function(){wizardEpoch++;uninstallEpoch++;stopPoll();wizardBusy=false;uninstallBusy=false;setWizardBusy(false);w('uninstall-loading').hidden=true;uninstallDialog.querySelectorAll('button').forEach(el=>el.disabled=false);if(wizard.open)wizard.close();if(chooser.open)chooser.close();if(uninstallDialog.open)uninstallDialog.close();uninstallItem=null;w('installed-skills').textContent='Belum terpasang.';w('installed-mcp').textContent='Belum terpasang.';priorShowLocked()};
+const priorShowLocked=showLocked;showLocked=function(){wizardEpoch++;uninstallEpoch++;stopPoll();wizardBusy=false;uninstallBusy=false;setWizardBusy(false);w('uninstall-loading').hidden=true;uninstallDialog.querySelectorAll('button').forEach(el=>el.disabled=false);if(wizard.open)wizard.close();if(chooser.open)chooser.close();if(uninstallDialog.open)uninstallDialog.close();if(w('catalog-modal').open)w('catalog-modal').close();uninstallItem=null;w('installed-skills').textContent='Belum ada yang terpasang. Buka Kategori untuk memasang.';w('installed-mcp').textContent='Belum ada yang terpasang. Buka Kategori untuk memasang.';priorShowLocked()};

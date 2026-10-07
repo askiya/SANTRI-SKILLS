@@ -4,11 +4,43 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { createSession, AuthError } = require('./auth');
-const { fetchSource, listSkills } = require('./sources');
-async function remoteSkills(reg) { const skills=[]; for(const source of reg.sources) { const root=await fetchSource(source); skills.push(...listSkills(source,root)); } return skills; }
-const { mcpCatalog } = require('./registry');
-const { installSkills, addMcpServer, configStatus, removeInstalled, SHADCN_ENTRY } = require('./install');
+const { registry, fetchSource, listSkills } = require('./sources');
+const { mcpCatalog, validateRegistry } = require('./registry');
+function mergedCatalog(remote) {
+  const bundled = registry(), sources = [], mcpServers = [];
+  for (const source of [...bundled.sources, ...remote.sources]) {
+    if (!sources.some(s => s.id === source.id || s.repo.toLowerCase() === source.repo.toLowerCase())) sources.push(source);
+  }
+  for (const entry of [...bundled.mcpServers, ...remote.mcpServers]) {
+    if (!mcpServers.some(m => m.id === entry.id)) mcpServers.push(entry);
+  }
+  return validateRegistry({ sources, mcpServers });
+}
+async function remoteSkills(reg, sourceFetch) {
+  const skills = new Map();
+  for (const source of reg.sources) {
+    const root = await sourceFetch(source);
+    for (const skill of listSkills(source, root)) {
+      const previous = skills.get(skill.id);
+      if (previous && (previous.source !== skill.source || previous.dir !== skill.dir)) throw new Error(`ID skill katalog ambigu: ${skill.id}`);
+      skills.set(skill.id, skill);
+    }
+  }
+  return [...skills.values()];
+}
+const { installSkills, addMcpServer, mergeMcpEntries, configStatus, removeInstalled, SHADCN_ENTRY } = require('./install');
 const REACT_BITS_URL='https://reactbits.dev/get-started/mcp';
+function reactBitsSource(value){
+  if(typeof value!=='string')return null;
+  try{
+    const u=new URL(value.trim());
+    if(u.protocol!=='https:'||u.username||u.password||u.port||u.search||u.hash)return null;
+    const host=u.hostname.toLowerCase(),sourcePath=u.pathname.replace(/\/$/,'');
+    if(host==='reactbits.dev'&&(sourcePath===''||sourcePath==='/get-started/mcp'))return REACT_BITS_URL;
+    if((host==='github.com'||host==='www.github.com')&&/^\/davidhdev\/react-bits(?:\.git)?$/i.test(sourcePath))return REACT_BITS_URL;
+  }catch{}
+  return null;
+}
 const REACT_BITS_REGISTRY={registries:{'@react-bits':'https://reactbits.dev/r/{name}.json'}};
 const WEBSITE_WARNING='shadcn@latest tidak dipin. Antigravity dapat menjalankan npx dan mengunduh kode jaringan saat MCP dimuat; hanya lanjut jika mempercayai paket dan jaringan. Runtime IDE belum diverifikasi.';
 const { previewRepo, installFromRepo, parseGithubRepo } = require('./repo');
@@ -29,16 +61,7 @@ function copyLocalSkills(skills, targets) {
     return installSkills(staged,targets);
   } finally {fs.rmSync(tmp,{recursive:true,force:true});}
 }
-function mergeLocalMcp(file, entries) {
-  assertNoLinks(file);assertNoLinks(file+'.bak');
-  if(fs.existsSync(file)&&fs.lstatSync(file).nlink!==1)throw new Error('Hardlink target ditolak.');
-  if(fs.existsSync(file+'.bak')&&fs.lstatSync(file+'.bak').nlink!==1)throw new Error('Hardlink backup ditolak.');
-  let cfg={};if(fs.existsSync(file)){try{cfg=JSON.parse(fs.readFileSync(file,'utf8')||'{}')}catch{throw new Error('Target mcp_config.json bukan JSON valid. File tidak diubah.')}}
-  if(!cfg||typeof cfg!=='object'||Array.isArray(cfg)||cfg.mcpServers!=null&&(!cfg.mcpServers||typeof cfg.mcpServers!=='object'||Array.isArray(cfg.mcpServers)))throw new Error('Target/mcpServers wajib object. File tidak diubah.');
-  const bag=cfg.mcpServers||{};const collisions=Object.keys(entries).filter(n=>Object.hasOwn(bag,n));if(collisions.length)throw new Error(`MCP sudah ada: ${collisions.join(', ')}. File tidak diubah.`);
-  const next={...cfg,mcpServers:{...bag,...entries}};fs.mkdirSync(path.dirname(file),{recursive:true});if(fs.existsSync(file))fs.copyFileSync(file,file+'.bak');
-  const temp=file+`.tmp-${process.pid}`;try{fs.writeFileSync(temp,JSON.stringify(next,null,2)+'\n',{flag:'wx'});fs.renameSync(temp,file)}finally{fs.rmSync(temp,{force:true})}return Object.keys(next.mcpServers);
-}
+function mergeLocalMcp(file,entries){const result=mergeMcpEntries(file,entries);return {servers:Object.keys(result.mcpServers||{}),backup:result.backup}}
 const { detectTargets, validateCustomTargets, resolveTargets, resolveForWrite, findAntigravityExecutable } = require('./detect');
 
 const STATIC = {
@@ -56,9 +79,28 @@ const MAX_BODY = 16384;
 // Private entries for PATH checks; only safe metadata is sent in API responses.
 function configStatusNames(file) { try { const c = JSON.parse(fs.readFileSync(file, 'utf8') || '{}'); return c && c.mcpServers && typeof c.mcpServers === 'object' && !Array.isArray(c.mcpServers) ? Object.fromEntries(Object.entries(c.mcpServers).filter(([,entry])=>mcpKind(entry))) : {}; } catch { return {}; } }
 
-function createDashboardServer({ cwd = process.cwd(), home, env = process.env, apiUrl, websiteUrl, githubFetch = globalThis.fetch, controlRunner = runControl, bridgeFile } = {}) {
+function createDashboardServer({ cwd = process.cwd(), home, env = process.env, apiUrl, websiteUrl, githubFetch = globalThis.fetch, sourceFetch = fetchSource, controlRunner = runControl, bridgeFile } = {}) {
   const session = createSession({ apiUrl, websiteUrl });
   const capabilityFile=bridgeFile||path.join(home||os.homedir(),'.santrihub','bridge.json');
+  const reposFile=path.join(home||os.homedir(),'.santrihub','repos.json');
+  function canonicalRepo(url){
+    // GitHub owner/repo case-insensitive; store lowercase so paste dari browser tetap bisa disimpan.
+    if(typeof url==='string')url=url.trim().toLowerCase();
+    if(typeof url!=='string'||url.length>256||!/^https:\/\/github\.com\/[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9_.-]{1,100}$/.test(url)||url.endsWith('.git')||['.','..'].includes(url.split('/').pop()))throw new AuthError(400,'URL wajib: https://github.com/owner/repo (tanpa tree/query).');
+    return url;
+  }
+  function readRepos(){
+    assertNoLinks(reposFile);if(!fs.existsSync(reposFile))return [];
+    if(fs.statSync(reposFile).size>2*1024*1024)throw new Error('File bookmark terlalu besar.');
+    const rows=JSON.parse(fs.readFileSync(reposFile,'utf8'));
+    if(!Array.isArray(rows)||rows.length>50)throw new Error('File bookmark invalid.');
+    return rows.map(row=>{const url=canonicalRepo(row.url);for(const names of [row.skills,row.mcp])if(!Array.isArray(names)||names.length>100||names.some(n=>typeof n!=='string'||n.length>160))throw new Error('Deteksi bookmark invalid.');return {url,repo:url.slice(19),skills:row.skills,mcp:row.mcp}});
+  }
+  function writeRepos(rows){
+    assertNoLinks(reposFile);fs.mkdirSync(path.dirname(reposFile),{recursive:true,mode:0o700});
+    const tmp=reposFile+'.'+crypto.randomBytes(8).toString('hex')+'.tmp';
+    try{fs.writeFileSync(tmp,JSON.stringify(rows),{flag:'wx',mode:0o600});fs.renameSync(tmp,reposFile)}finally{fs.rmSync(tmp,{force:true})}
+  }
   let verification=null;
   const clearVerification=()=>{verification=null;assertNoLinks(capabilityFile);fs.rmSync(capabilityFile,{force:true});};
   const binding=()=>{const t=resolveTargets('global',targetOptions());const hash=crypto.createHash('sha256').update(JSON.stringify(t));for(const file of [t.mcpFile,...t.skillsDirs.flatMap(dir=>fs.existsSync(dir)?fs.readdirSync(dir).map(id=>path.join(dir,id,'SKILL.md')):[])]){assertNoLinks(file);hash.update(file);if(fs.existsSync(file)&&fs.statSync(file).isFile())hash.update(fs.readFileSync(file));}return hash.digest('hex');};
@@ -197,11 +239,12 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         return send(200, configStatus(scopes[0], cwd, home, { skillTargets: target.skillsDirs, mcpFile: target.mcpFile }));
       }
 
+      if(req.method==='GET'&&req.url==='/api/repos'){await session.requirePremium();return send(200,readRepos())}
       if (req.method === 'GET' && req.url === '/api/catalog') {
         await session.requirePremium();
-        const remoteCatalog = await session.catalog();
-        const skills = await remoteSkills(remoteCatalog);
-        const mcpServers = mcpCatalog(remoteCatalog).map(({ id, label, description }) => ({ id, label, description }));
+        const catalog = mergedCatalog(await session.catalog());
+        const skills = await remoteSkills(catalog, sourceFetch);
+        const mcpServers = mcpCatalog(catalog).map(({ id, label, description }) => ({ id, label, description }));
         return send(200, {
           cwd,
           skills: skills.map(({ id, description, source }) => ({ id, description, source })),
@@ -228,10 +271,20 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
       // CSRF on write operations
       if (['/api/install', '/api/mcp', '/api/repo/install', '/api/repo/preview', '/api/targets/custom',
            '/api/local/skills/preview', '/api/local/skills/install',
-           '/api/local/mcp/preview', '/api/local/mcp/install', '/api/github/preview', '/api/github/install', '/api/website/preview', '/api/website/install', '/api/verify', '/api/antigravity/control'].includes(req.url)) {
+           '/api/local/mcp/preview', '/api/local/mcp/install', '/api/github/preview', '/api/github/install', '/api/repos', '/api/repos/delete', '/api/website/preview', '/api/website/install', '/api/verify', '/api/antigravity/control'].includes(req.url)) {
         if (!input._csrf || !csrfTokens.has(input._csrf) || Date.now()-csrfTokens.get(input._csrf)>900_000) return send(403, { error: 'Token CSRF tidak valid. Muat ulang halaman.' });
       }
 
+      if(['/api/repos','/api/repos/delete'].includes(req.url)){
+        const url=canonicalRepo(input.url),rows=readRepos();
+        if(req.url.endsWith('/delete')){writeRepos(rows.filter(row=>row.url!==url));return send(200,{saved:false})}
+        if(rows.some(row=>row.url===url))throw new AuthError(409,'Repository sudah disimpan.');
+        if(rows.length>=50)throw new AuthError(400,'Maksimal 50 repository.');
+        const held=githubPreviews.get(input.previewId);
+        if(!held||held.expires<=Date.now()||held.snap.source.trim().toLowerCase()!==url)throw new AuthError(409,'Preview repository wajib. Preview ulang.');
+        const row={url,repo:url.slice(19),skills:held.snap.skills.map(s=>s.name),mcp:held.snap.mcp.flatMap(m=>m.names)};
+        writeRepos([...rows,row]);return send(200,row);
+      }
       if (req.url === '/api/targets/custom') {
         const result = validateCustomTargets(input, { cwd: path.resolve(__dirname, '..') });
         clearVerification();customTargets = { skillsDir: result.skillsDir, mcpFile: result.mcpFile };localPreviews.clear();
@@ -287,41 +340,45 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         const unknown = names.filter(n => !snap.names.includes(n));
         if (unknown.length) throw new AuthError(400, `MCP tidak ada di sumber: ${unknown.join(', ')}`);
         const config = resolveForWrite(input.scope, { ...targetOptions(), kind: 'mcp' }).mcpFile;
-        const existed = fs.existsSync(config);
-        const servers = mergeLocalMcp(config, Object.fromEntries(names.map(n => [n, snap.entries[n]])));
-        return send(200, { source: snap.source, scope: input.scope, config, added: names, servers, backup: existed ? `${config}.bak` : null, message: `${names.length} MCP lokal didaftarkan. Reload Antigravity.` });
+        const merged = mergeLocalMcp(config, Object.fromEntries(names.map(n => [n, snap.entries[n]])));
+        return send(200, { source: snap.source, scope: input.scope, config, added: names, servers: merged.servers, backup: merged.backup, message: `${names.length} MCP lokal didaftarkan. Reload Antigravity.` });
       }
 
       if (req.url === '/api/website/preview') {
-        if(input.url!==REACT_BITS_URL)throw new AuthError(400,'Preset website tidak dikenal. Hanya URL dokumentasi React Bits yang didukung persis.');
+        if(!reactBitsSource(input.url))throw new AuthError(400,'Preset website tidak dikenal. Hanya URL React Bits resmi atau repo DavidHDev/react-bits yang didukung.');
         if(input.scope!=='global')throw new AuthError(400,'Scope invalid.');
         const target=resolveTargets('global',targetOptions()),previewId=crypto.randomBytes(24).toString('hex');
         for(const [id,p] of websitePreviews)if(p.expires<=Date.now())websitePreviews.delete(id);
         while(websitePreviews.size>=10)websitePreviews.delete(websitePreviews.keys().next().value);
         websitePreviews.set(previewId,{url:REACT_BITS_URL,target:JSON.stringify(target),expires:Date.now()+600000});
-        return send(200,{previewId,source:'website-preset',url:REACT_BITS_URL,name:'shadcn',entry:SHADCN_ENTRY,target:target.mcpFile,registry:REACT_BITS_REGISTRY,registryInstruction:'Salin blok registries ke components.json pada SETIAP project yang memakai React Bits. Konfigurasi global tidak dapat menggantikannya.',warning:WEBSITE_WARNING,runtime:'unverified',fetched:false});
+        return send(200,{previewId,source:'website-preset',url:REACT_BITS_URL,name:'shadcn',entry:SHADCN_ENTRY,target:target.mcpFile,registry:REACT_BITS_REGISTRY,registryInstruction:'Salin blok registries ke components.json pada SETIAP project yang memakai React Bits. Konfigurasi global tidak dapat menggantikannya.',warning:WEBSITE_WARNING,recognition:'React Bits dikenali · menggunakan shadcn MCP',runtime:'unverified',fetched:false});
       }
       if (req.url === '/api/website/install') {
-        if(input.url!==REACT_BITS_URL)throw new AuthError(409,'Sumber berbeda dari preview. Preview ulang.');
+        if(!reactBitsSource(input.url))throw new AuthError(409,'Sumber berbeda dari preview. Preview ulang.');
         if(input.confirm!==true||input.consentNetworkExecution!==true)throw new AuthError(400,'Konfirmasi risiko eksekusi jaringan wajib.');
-        const held=websitePreviews.get(input.previewId);websitePreviews.delete(input.previewId);
-        if(!held||held.expires<=Date.now()||held.url!==input.url||held.target!==JSON.stringify(resolveTargets('global',targetOptions())))throw new AuthError(409,'Preview tidak ada, kedaluwarsa, atau target berubah. Preview ulang.');
-        const config=resolveForWrite('global',{...targetOptions(),kind:'mcp'}).mcpFile,existed=fs.existsSync(config);
-        addMcpServer(config,SHADCN_ENTRY,'shadcn',{preset:'react-bits'});clearVerification();
-        return send(200,{name:'shadcn',config,backup:existed?config+'.bak':null,runtime:'unverified',warning:WEBSITE_WARNING,registry:REACT_BITS_REGISTRY});
+        const held=websitePreviews.get(input.previewId);
+        if(!held||held.expires<=Date.now()||held.url!==reactBitsSource(input.url)||held.target!==JSON.stringify(resolveTargets('global',targetOptions())))throw new AuthError(409,'Preview tidak ada, kedaluwarsa, atau target berubah. Preview ulang.');
+        const config=resolveForWrite('global',{...targetOptions(),kind:'mcp'}).mcpFile;
+        // Token consumed only after the write commits: failed validation/collision keeps the preview correctable.
+        const written=addMcpServer(config,SHADCN_ENTRY,'shadcn',{preset:'react-bits'});websitePreviews.delete(input.previewId);clearVerification();
+        return send(200,{name:'shadcn',config,backup:written.backup,verified:true,runtime:'unverified',warning:WEBSITE_WARNING,registry:REACT_BITS_REGISTRY});
       }
 
       if (req.url === '/api/github/preview') {
         if (!['project','global'].includes(input.scope)) throw new AuthError(400, 'Scope invalid.');
         const targets = resolveTargets(input.scope, targetOptions());
-        const snap = await previewGithub(input.url, { fetcher: githubFetch, scope: input.scope, targets: { skillsDirs: targets.skillsDirs, mcpFile: targets.mcpFile } });
-        if (!snap.skills.length && !snap.mcp.length) throw new AuthError(400, 'Tidak ada SKILL.md atau mcp_config.json relevan di repo ini.');
+        let snap;try { snap = await previewGithub(input.url, { fetcher: githubFetch, scope: input.scope, targets: { skillsDirs: targets.skillsDirs, mcpFile: targets.mcpFile } }); } catch(error) {
+          if(!error.tooLarge&&!error.unscannable)throw error;
+          return send(200,{classification:error.unscannable?'unscannable':'too-large',sourceUrl:input.url,scope:input.scope,targets,skills:[],mcp:[],installCommands:[],note:error.unscannable?'Repository valid, tetapi struktur arsip tidak dapat dipindai aman. Tidak ada item yang dipasang.':'Repository valid, tetapi terlalu besar untuk dipindai dengan aman; tidak ada yang dapat dipasang otomatis.'});
+
+        }
+        const classification = snap.skills.length || snap.mcp.length ? 'installable' : 'empty';
         const id = crypto.randomBytes(24).toString('hex');
         githubPreviews.set(id, { snap, scope: input.scope, target: JSON.stringify(targets), expires: Date.now() + 600_000 });
         for (const [k, v] of githubPreviews) if (v.expires <= Date.now()) githubPreviews.delete(k);
         while (githubPreviews.size > 10) githubPreviews.delete(githubPreviews.keys().next().value);
         return send(200, { previewId: id, previewHash: snap.hash, sourceUrl: snap.source, scope: input.scope, ...publicPreview(snap),
-          note: 'Preview saja. Tidak ada script repo yang dijalankan. Instalasi hanya menulis SKILL.md dan entri mcpServers setelah Anda konfirmasi.' });
+          classification, note: classification === 'empty' ? 'Repository valid, tetapi tidak menyediakan SKILL.md atau konfigurasi MCP yang dapat dipasang.' : 'Preview saja. Tidak ada script repo yang dijalankan. Instalasi hanya menulis SKILL.md dan entri mcpServers setelah Anda konfirmasi.' });
       }
       if (req.url === '/api/github/install') {
         if (!['project','global'].includes(input.scope)) throw new AuthError(400, 'Scope invalid.');
@@ -329,10 +386,12 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         if (input.confirm !== true) throw new AuthError(400, 'Konfirmasi instalasi wajib.');
         const held = githubPreviews.get(input.previewId);
         if (!held || held.expires <= Date.now()) throw new AuthError(409, 'Preview tidak ada atau kedaluwarsa. Preview ulang.');
-        githubPreviews.delete(input.previewId);
         if (held.scope !== input.scope || held.target !== JSON.stringify(resolveTargets(input.scope, targetOptions()))) throw new AuthError(409, 'Scope/target berbeda dari preview. Preview ulang.');
         if (input.sourceUrl !== held.snap.source) throw new AuthError(409, 'URL berbeda dari preview. Preview ulang.');
         if (input.previewHash !== held.snap.hash) throw new AuthError(409, 'Preview sudah tidak sama. Preview ulang.');
+        if (held.installing) throw new AuthError(409, 'Instalasi sedang berjalan.');
+        held.installing = true;
+        try {
         const current = await previewGithub(held.snap.source, {fetcher: githubFetch, scope: held.scope, targets: held.snap.targets});
         if(current.hash !== held.snap.hash) throw new AuthError(409, 'Sumber berubah sejak preview. Preview ulang.');
         const skillIds = Array.isArray(input.skillIds) ? input.skillIds : [];
@@ -356,9 +415,8 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         }
         if (mcpNames.length) {
           const config = resolveForWrite(input.scope, { ...targetOptions(), kind: 'mcp' }).mcpFile;
-          const existed = fs.existsSync(config);
-          const servers = mergeLocalMcp(config, entries);
-          result.mcp = { config, backup: existed ? `${config}.bak` : null, servers,
+          const merged = mergeLocalMcp(config, entries);
+          result.mcp = { config, backup: merged.backup, servers: merged.servers,
             added: mcpNames.map(name => ({ name, config: 'config ditulis', ...mcpRuntimeStatus(entries[name], env) })) };
           const missing = result.mcp.added.filter(a => a.available === false || a.launcherAvailable === false).map(a => a.name);
           result.partial = missing.length > 0;
@@ -366,7 +424,9 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
             ? `Config ditulis, TAPI binary untuk ${missing.join(', ')} tidak ditemukan di PATH. Server ini akan gagal di Antigravity sampai Anda memasang binary-nya sendiri. Perintah instalasi dari README hanya ditampilkan sebagai teks; dashboard tidak pernah menjalankannya.`
             : null;
         }
+        githubPreviews.delete(input.previewId);
         return send(200, result);
+        } finally { held.installing = false; }
       }
       if (req.url === '/api/verify') {
         if (!['project','global'].includes(input.scope)) throw new AuthError(400, 'Scope invalid.');
@@ -374,8 +434,9 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         const status = configStatus(input.scope, cwd, home, { skillTargets: target.skillsDirs, mcpFile: target.mcpFile });
         const raw = status.mcp.exists ? configStatusNames(status.mcp.configFile) : {};
         status.mcp.servers = status.mcp.servers.map(s => ({ ...s, ...mcpRuntimeStatus(raw[s.name], env) }));
-        const skillsCatalog = await remoteSkills(await session.catalog());
-        const mcpCandidates = mcpCatalog(await session.catalog());
+        const catalog = mergedCatalog(await session.catalog());
+        const skillsCatalog = await remoteSkills(catalog, sourceFetch);
+        const mcpCandidates = mcpCatalog(catalog);
         if (input.skillIds != null && (!Array.isArray(input.skillIds) || input.skillIds.length > 1000 || input.skillIds.some(id=>typeof id !== 'string' || !skillsCatalog.some(s=>s.id===id)))) throw new AuthError(400, 'Kandidat skill invalid.');
         const skillIds = [...new Set([...status.skills.map(s=>s.id), ...(input.skillIds||[])])];
         const skillChecks = skillIds.map(id=>{const found=status.skills.find(s=>s.id===id);return {id,exists:Boolean(found),path:found?path.join(found.dir,'SKILL.md'):path.join(target.skillsDirs[0],id,'SKILL.md')};});
@@ -418,21 +479,20 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
       try {
         if (req.url === '/api/mcp') {
           if (typeof input.id !== 'string' || input.confirm !== true) throw new Error('Konfirmasi MCP wajib');
-          const entry = mcpCatalog(await session.catalog()).find((m) => m.id === input.id);
+          const entry = mcpCatalog(mergedCatalog(await session.catalog())).find((m) => m.id === input.id);
           if (!entry) throw new Error('MCP tidak terdaftar di katalog');
           const config = resolveForWrite(input.scope, { ...targetOptions(), kind: 'mcp' }).mcpFile;
           const before = fs.existsSync(config) ? Object.keys(configStatusNames(config)) : [];
-          const existed = fs.existsSync(config);
           const name = entry.builtin ? 'santri-skills' : entry.id;
           const written = entry.builtin
             ? addMcpServer(config, { command: process.execPath, args: [path.resolve(__dirname, '../bin/cli.js'), 'mcp-serve'] })
             : addMcpServer(config, { command: entry.command, args: entry.args }, entry.id);
           const after = Object.keys(written.mcpServers || {});
-          return send(200, { message: `MCP ${name} terdaftar. Reload Antigravity.`, config, backup: existed ? `${config}.bak` : null,
+          return send(200, { message: `MCP ${name} terdaftar. Reload Antigravity.`, config, backup: written.backup,
             added: after.filter((n) => !before.includes(n)), updated: before.includes(name) ? [name] : [], servers: after });
         }
         if (!Array.isArray(input.skillIds) || !input.skillIds.length || input.skillIds.some((id) => typeof id !== 'string')) throw new Error('Pilih skill');
-        const skills = await remoteSkills(await session.catalog());
+        const skills = await remoteSkills(mergedCatalog(await session.catalog()), sourceFetch);
         if (input.skillIds.some((id) => !skills.some((s) => s.id === id))) throw new Error('Skill tidak terdaftar');
         const result = installSkills(skills.filter((s) => input.skillIds.includes(s.id)), resolveForWrite(input.scope, { ...targetOptions(), kind: 'skills' }).skillsDirs);
         send(200, { installed: result.installed.length, skipped: result.skipped.length });
