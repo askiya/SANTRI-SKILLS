@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Santri Skills",
+  "version": "0.1.1",
+  "description": "Kelola dan pasang Santriverse Skills ke Google Gemini.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsAVggIZGe09a7A/rJ8cXnCGKvg0e83ZvZu4UooMx1hEtP19ywaAFT/J0h0wn1PcMhGqvdohBBi5i4v9WP5D44kRYN153cW3IO66hpL1IfsjEk/lTLV/A9qaX7FZIfcn2F8dI6GL2dT/Zc1txGHc7xJcLd7hIr+PeWVlAK/a9jxURVHziIMAP+biFFdsvBIw/18jK42SNZAnmUk5al2sc00E+ashEXRCwpqjQnvFVcDy0CS3D35nNumnZBOQn+DFvwvhckwW0iUzkEsgw43EkOYGls+yRMkMA4R1f2WhsG2EUSPAzkDYIAUC6Lc/uM9t7tC134fLnYOBDV3l3aqtgOwIDAQAB",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "activeTab",
+    "identity"
+  ],
+  "host_permissions": [
+    "https://santriverse.my.id/*",
+    "https://api.santriverse.my.id/*",
+    "https://gemini.google.com/*"
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Santri Skills",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}

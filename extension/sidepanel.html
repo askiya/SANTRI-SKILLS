@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="id" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Santri Skills</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark"><img src="icons/icon-32.png" alt=""></span><div><strong>Santri Skills</strong><small>Gemini companion</small></div></div>
+    <button id="theme-toggle" class="icon-btn" aria-label="Ganti theme" title="Ganti theme">☼</button>
+  </header>
+
+  <main>
+    <div id="notice" class="notice hidden" role="status"></div>
+
+    <section id="login-section" class="panel">
+      <span class="login-mark" aria-hidden="true"><img src="icons/icon-128.png" alt=""></span>
+      <span class="eyebrow">SANTRIVERSE SKILLS</span>
+      <h1>Skills kamu,<br>siap di Gemini.</h1>
+      <p>Hubungkan akun Premium melalui Santriverse. Password tetap di situs resmi, bukan di extension.</p>
+      <button id="login-btn" class="btn btn-primary">Hubungkan akun Santriverse</button>
+      <p class="security-note">Sesi hanya disimpan selama browser terbuka.</p>
+    </section>
+
+    <section id="consent-section" class="panel hidden">
+      <span class="eyebrow">PERSETUJUAN</span>
+      <h2>Aturan penggunaan</h2>
+      <div class="terms">
+        <p>Paket khusus member. Dilarang membagikan, menjual ulang, atau mengunggah ulang.</p>
+        <p>Pelanggaran terbukti dapat menghilangkan akses komunitas, Skill, dan pembaruan.</p>
+        <p>Berakhirnya membership menghentikan katalog, paket baru, dan pembaruan—bukan menghapus file yang sudah diunduh.</p>
+      </div>
+      <label class="check"><input id="consent-check" type="checkbox"> <span>Saya memahami dan menyetujui aturan di atas.</span></label>
+      <button id="consent-btn" class="btn btn-primary" disabled>Lanjutkan</button>
+    </section>
+
+    <section id="catalog-section" class="hidden">
+      <div class="catalog-head">
+        <div><span class="eyebrow">KATALOG</span><h2>Skills &amp; Gems</h2></div>
+        <button id="refresh-btn" class="icon-btn" aria-label="Muat ulang katalog" title="Muat ulang">↻</button>
+      </div>
+      <div id="catalog-grid" class="catalog-grid"></div>
+      <div id="empty-state" class="empty hidden"><strong>Belum ada item</strong><p>Katalog premium belum tersedia.</p></div>
+    </section>
+
+    <section id="tutorial" class="panel hidden" aria-labelledby="tutorial-title">
+      <button id="tutorial-close" class="close-btn" aria-label="Tutup tutorial">×</button>
+      <span class="eyebrow">LANGKAH MANUAL</span>
+      <h2 id="tutorial-title">Pasang di Gemini</h2>
+      <ol id="tutorial-steps"></ol>
+      <p class="honesty">Extension membuka halaman tujuan dan menyiapkan paket. Upload serta konfirmasi akhir tetap dilakukan member di Gemini.</p>
+      <button id="tutorial-open" class="btn btn-primary">Buka Gemini</button>
+      <button id="member-confirm" class="btn btn-secondary">Saya sudah menyelesaikan</button>
+    </section>
+  </main>
+
+  <footer><span>Santriverse</span><button id="logout-btn" class="link-btn hidden">Keluar</button></footer>
+
+  <script src="auth.js"></script>
+  <script src="consent.js"></script>
+  <script src="catalog.js"></script>
+  <script src="gemini-adapter.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
