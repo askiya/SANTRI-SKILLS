@@ -29,6 +29,7 @@
     "build:extension": "node scripts/build-extension.js",
     "store:assets": "node scripts/build-store-assets.js",
     "build:ide": "node scripts/build-ide-extension.js",
+    "package:ide": "cd ide-extension && npx --yes @vscode/vsce package --no-dependencies --out ../dist/",
     "test:ide": "node --test test/ide-extension.test.js",
     "app": "node bin/cli.js app"
   },

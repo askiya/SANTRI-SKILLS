@@ -16,7 +16,7 @@ const { writeZip } = require('./build-extension');
 const ROOT = path.resolve(__dirname, '..');
 const SRC = path.join(ROOT, 'ide-extension');
 const DIST = path.join(ROOT, 'dist');
-const EXCLUDE = /(^|\/)(\.DS_Store|\.vscode|node_modules|test|\.preview)(\/|$)|\.test\.js$|\.vsix$/;
+const EXCLUDE = /(^|\/)(\.DS_Store|\.vscode|node_modules|test|\.preview)(\/|$)|\.test\.js$|\.vsix$|^LICENSE$/;
 const CONTENT_TYPES = { '.json': 'application/json', '.js': 'application/javascript', '.css': 'text/css', '.md': 'text/markdown', '.png': 'image/png', '.svg': 'image/svg+xml', '.txt': 'text/plain', '.vsixmanifest': 'text/xml' };
 
 const xml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
@@ -94,7 +94,7 @@ function buildIdeExtension({ outDir = DIST } = {}) {
 
   const files = listFiles(SRC).filter((f) => !EXCLUDE.test(f));
   const entries = files.map((name) => ({ name: `extension/${name}`, data: fs.readFileSync(path.join(SRC, name)) }));
-  entries.push({ name: 'extension/LICENSE.txt', data: fs.readFileSync(path.join(ROOT, 'LICENSE')) });
+  entries.push({ name: 'extension/LICENSE.txt', data: fs.readFileSync(path.join(SRC, 'LICENSE')) });
   const names = ['extension.vsixmanifest', ...entries.map((e) => e.name)];
   const all = [
     { name: '[Content_Types].xml', data: Buffer.from(contentTypes(names)) },

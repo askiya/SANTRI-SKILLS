@@ -28,6 +28,14 @@
     "antigravity"
   ],
   "main": "./extension.js",
+  "files": [
+    "extension.js",
+    "src/**",
+    "media/**",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "extensionKind": [
     "ui",
     "workspace"

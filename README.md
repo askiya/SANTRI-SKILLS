@@ -161,7 +161,14 @@ npm run build:ide   # dist/santri-code-<versi>.vsix
 npm run test:ide
 ```
 
-Pasang: **Extensions → ⋯ → Install from VSIX…** di VS Code atau Antigravity, atau `code --install-extension dist/santri-code-0.1.0.vsix`. File yang sama bisa diunggah ke Open VSX (registry Antigravity/Cursor/Windsurf) dan VS Code Marketplace.
+Pasang: **Extensions → ⋯ → Install from VSIX…** di VS Code atau Antigravity, atau `code --install-extension dist/santri-code-<versi>.vsix`.
+
+### Rilis ke marketplace
+
+1. Naikkan `version` di `ide-extension/package.json` dan tulis `ide-extension/CHANGELOG.md`.
+2. `npm run package:ide` → `dist/santri-code-<versi>.vsix` (dikemas `@vscode/vsce` resmi).
+3. **VS Code Marketplace** (publisher `santriverse`): https://marketplace.visualstudio.com/manage → item Santri Code → **⋯ → Update** → upload VSIX. Rilis pertama: **New extension → Visual Studio Code**.
+4. **Open VSX** (Antigravity, Cursor, Windsurf): `npx ovsx publish dist/santri-code-<versi>.vsix -p <token>`. Token dibuat di open-vsx.org → Settings → Access Tokens, diketik langsung di terminal, tidak pernah disimpan di repo.
 
 ## Menambah repo skill dan MCP sendiri
 
