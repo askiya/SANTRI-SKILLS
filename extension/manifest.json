@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Santri Skills",
-  "version": "0.2.0",
-  "description": "Pasang Santriverse Skills ke Google Gemini dalam 2 klik (khusus Member Premium).",
+  "version": "0.3.0",
+  "description": "Pasang Santriverse Skills ke Google Gemini dan ChatGPT dalam 2 klik (khusus Member Premium).",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsAVggIZGe09a7A/rJ8cXnCGKvg0e83ZvZu4UooMx1hEtP19ywaAFT/J0h0wn1PcMhGqvdohBBi5i4v9WP5D44kRYN153cW3IO66hpL1IfsjEk/lTLV/A9qaX7FZIfcn2F8dI6GL2dT/Zc1txGHc7xJcLd7hIr+PeWVlAK/a9jxURVHziIMAP+biFFdsvBIw/18jK42SNZAnmUk5al2sc00E+ashEXRCwpqjQnvFVcDy0CS3D35nNumnZBOQn+DFvwvhckwW0iUzkEsgw43EkOYGls+yRMkMA4R1f2WhsG2EUSPAzkDYIAUC6Lc/uM9t7tC134fLnYOBDV3l3aqtgOwIDAQAB",
   "permissions": [
     "sidePanel",
@@ -13,7 +13,8 @@
   "host_permissions": [
     "https://santriverse.my.id/*",
     "https://api.santriverse.my.id/*",
-    "https://gemini.google.com/*"
+    "https://gemini.google.com/*",
+    "https://chatgpt.com/*"
   ],
   "side_panel": {
     "default_path": "sidepanel.html"
@@ -42,6 +43,15 @@
       ],
       "run_at": "document_idle",
       "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "chatgpt-plugins.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "action": {

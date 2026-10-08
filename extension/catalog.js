@@ -20,26 +20,46 @@ const INSTALL_LABELS = {
   update_available: 'Update di Gemini',
 };
 
+const CHATGPT_LABELS = {
+  not_installed: 'Pasang ke ChatGPT',
+  detected: 'Pasang ulang ChatGPT',
+  update_available: 'Update di ChatGPT',
+};
+
+/** One status line per target, e.g. "✓ Gemini · ✓ ChatGPT" or "Belum dipasang". */
+function statusLine(gemini, chatgpt) {
+  const parts = [];
+  if (gemini === 'detected') parts.push('✓ Terdeteksi di Gemini');
+  else if (gemini === 'update_available') parts.push('Gemini: update tersedia');
+  if (chatgpt === 'detected') parts.push('✓ Terpasang di ChatGPT');
+  else if (chatgpt === 'update_available') parts.push('ChatGPT: update tersedia');
+  if (!parts.length) return { text: statusLabel(gemini), cls: gemini };
+  const cls = [gemini, chatgpt].includes('update_available') ? 'update_available' : 'detected';
+  return { text: parts.join(' · '), cls };
+}
+
 function renderCard(item) {
   item = { ...item, name: item.title || item.name, type: item.kind || item.type };
   const status = item.status || 'not_installed';
+  const chatgptStatus = item.chatgptStatus || 'not_installed';
   const isGem = item.type === 'gem';
-  const primary = isGem
-    ? `<button class="btn btn-gem" data-action="open" data-id="${esc(item.id)}">Buka Gem</button>`
-    : `<button class="btn btn-gemini" data-action="install" data-id="${esc(item.id)}">${INSTALL_LABELS[status] || 'Pasang ke Gemini'}</button>`;
-  const secondary = isGem
-    ? `<button class="btn btn-download" data-action="download" data-id="${esc(item.id)}">Download Paket</button>`
-    : `<button class="btn btn-download" data-action="download" data-id="${esc(item.id)}">Download ZIP</button>`;
-  return `<div class="skill-card" data-id="${esc(item.id)}" data-type="${esc(item.type || 'skill')}">
+  const id = esc(item.id);
+  const buttons = isGem
+    ? `<button class="btn btn-gem" data-action="open" data-id="${id}">Buka Gem</button>
+    <button class="btn btn-download" data-action="download" data-id="${id}">Download Paket</button>`
+    : `<button class="btn btn-gemini" data-action="install" data-id="${id}">${INSTALL_LABELS[status] || 'Pasang ke Gemini'}</button>
+    <button class="btn btn-chatgpt" data-action="install-chatgpt" data-id="${id}">${CHATGPT_LABELS[chatgptStatus] || CHATGPT_LABELS.not_installed}</button>
+    <button class="btn btn-download wide" data-action="download" data-id="${id}">Download ZIP</button>`;
+  const line = isGem ? { text: statusLabel(status), cls: status } : statusLine(status, chatgptStatus);
+  return `<div class="skill-card" data-id="${id}" data-type="${esc(item.type || 'skill')}">
   <div class="card-header">
     <h3 class="card-title">${esc(item.name)}</h3>
     <span class="card-version">${esc(item.version || '')}</span>
   </div>
   <p class="card-desc">${esc(item.description)}</p>
   <div class="card-footer">
-    <span class="card-status status-${esc(status)}">${status === 'detected' ? '✓ ' : ''}${statusLabel(status)}</span>
-    ${primary}
-    ${secondary}
+    <span class="card-status status-${esc(line.cls)}">${esc(line.text)}</span>
+    ${buttons}
   </div>
 </div>`;
 }
@@ -49,5 +69,5 @@ function esc(s) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { renderCard, statusLabel, STATUS_LABELS, esc };
+  module.exports = { renderCard, statusLabel, statusLine, STATUS_LABELS, esc };
 }

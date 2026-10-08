@@ -14,3 +14,9 @@
 .status-detected{color:var(--good)!important;font-weight:700}.status-update_available{color:var(--warn)!important;font-weight:700}
 #premium-section{text-align:center}
 @media(prefers-reduced-motion:reduce){.step-active .step-icon{animation:none}}
+/* ChatGPT target + long descriptions */
+.btn-chatgpt{background:#0f1a17;color:#e8fff6;border:1px solid #1f8f6a}
+[data-theme="light"] .btn-chatgpt{background:#e9fbf3;color:#0b5f43;border-color:#7fd3b2}
+.btn-download.wide{grid-column:1/-1}
+.card-desc{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.target-badge{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.12em;padding:3px 8px;border-radius:20px;background:var(--surface2);color:var(--accent2);margin-left:6px;vertical-align:middle}

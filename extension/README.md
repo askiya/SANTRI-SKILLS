@@ -45,12 +45,28 @@ Jika satu langkah gagal (tampilan Gemini berubah, akun belum mendapat fitur Skil
 
 Gems tetap memakai `gem_url`/langkah manual.
 
+## Pasang ke ChatGPT (Plugins)
+
+ChatGPT menggantikan Custom GPT dengan **Plugins** (Custom GPT pensiun 11 Desember 2026). Plugin memuat skill dengan format `SKILL.md` yang sama, jadi paket Santriverse cukup dibungkus — tidak ditulis ulang. Alur **Pasang ke ChatGPT**:
+
+1. Cek Premium (`verifyPremium()`), unduh paket, verifikasi ukuran + SHA-256.
+2. `chatgpt-plugin.js` membungkus skill menjadi plugin portable (di memori, tanpa library):
+   `plugin.json` (Agent Plugins schema + `extensions.com.openai.interface`: nama, deskripsi, Santriverse, logo) · `skills/<nama>/SKILL.md` · `skills/<nama>/references/…` · `assets/logo.png`.
+3. Panel membuka/memakai tab `chatgpt.com/plugins` (tab chat tidak pernah diambil alih).
+4. `chatgpt-plugins.js` (content script) membuka **+ → Unggah plugin**, mengisi ZIP ke form upload milik ChatGPT, menunggu **Impor berhasil**, lalu membuka halaman plugin.
+5. **Member yang menekan “Instal Plugin”** — extension tidak pernah menekannya. Status **Terpasang di ChatGPT** muncul setelah ChatGPT tidak lagi menawarkan tombol instal.
+6. Pakai di chat biasa dengan `@Nama Plugin` (teruji di akun Free; file referensi terbaca).
+
+Plugin pribadi hasil upload belum bisa dihapus dari ChatGPT, jadi extension tidak pernah mengunggah duplikat: versi sama → membuka halaman plugin; versi baru → menyiapkan ZIP dan memandu ke **Tindakan plugin → Unggah versi baru**.
+
+Fallback manual: **Download ZIP ChatGPT** → chatgpt.com/plugins → + → Unggah plugin → Lihat Plugin → Instal Plugin.
+
 ## Test
 
 Dari root repository:
 
 ```bash
-node --test test/extension.test.js test/extension-security.test.js test/extension-member-flow.test.js test/extension-layout.test.js test/extension-gemini-install.test.js
+node --test test/extension.test.js test/extension-security.test.js test/extension-member-flow.test.js test/extension-layout.test.js test/extension-gemini-install.test.js test/extension-chatgpt-install.test.js
 ```
 
 Tidak ada runtime package tambahan, secret, build step, atau konfigurasi repository.

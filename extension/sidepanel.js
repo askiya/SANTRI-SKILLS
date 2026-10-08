@@ -100,14 +100,17 @@
   }
 
   // ── Install status (local, non-sensitive) ─────────────────────────────────
-  // What Gemini listed after the last assisted install: { [packageId]: { name, version, status } }.
-  async function readStatuses() {
-    try { return (await chrome.storage.local.get('install_status')).install_status || {}; } catch { return {}; }
+  // What each target showed after the last assisted install:
+  // install_status (Gemini) / chatgpt_status (ChatGPT): { [packageId]: { name, version, status } }.
+  const STATUS_KEYS = { gemini: 'install_status', chatgpt: 'chatgpt_status' };
+  async function readStatuses(target = 'gemini') {
+    const key = STATUS_KEYS[target];
+    try { return (await chrome.storage.local.get(key))[key] || {}; } catch { return {}; }
   }
-  async function writeStatus(id, value) {
-    const all = await readStatuses();
+  async function writeStatus(id, value, target = 'gemini') {
+    const all = await readStatuses(target);
     all[id] = value;
-    await chrome.storage.local.set({ install_status: all });
+    await chrome.storage.local.set({ [STATUS_KEYS[target]]: all });
   }
   function statusFor(item, stored) {
     const s = stored[item.id];
@@ -149,14 +152,16 @@
   }
 
   async function renderCatalog() {
-    const stored = await readStatuses();
-    $('#catalog-grid').innerHTML = catalogItems.map(item => renderCard({ ...item, status: statusFor(item, stored) })).join('');
+    const [gemini, chatgpt] = await Promise.all([readStatuses('gemini'), readStatuses('chatgpt')]);
+    $('#catalog-grid').innerHTML = catalogItems
+      .map(item => renderCard({ ...item, status: statusFor(item, gemini), chatgptStatus: statusFor(item, chatgpt) }))
+      .join('');
   }
 
   /** If a Gemini Skills tab is already open, mark skills Gemini lists there. */
   async function refreshDetection() {
     if (typeof detectListed !== 'function') return;
-    const stored = await readStatuses();
+    const stored = await readStatuses('gemini');
     const skills = catalogItems.filter(i => (i.kind || i.type) !== 'gem');
     const nameOf = (i) => stored[i.id]?.name || i.slug;
     const listed = await detectListed(skills.map(nameOf).filter(Boolean)).catch(() => null);
@@ -164,7 +169,7 @@
     let changed = false;
     for (const item of skills) {
       if (listed.includes(nameOf(item)) && !stored[item.id]) {
-        await writeStatus(item.id, { name: nameOf(item), version: item.version, status: 'detected' });
+        await writeStatus(item.id, { name: nameOf(item), version: item.version, status: 'detected' }, 'gemini');
         changed = true;
       }
     }
@@ -190,8 +195,25 @@
 
   $('#refresh-btn').addEventListener('click', loadCatalog);
 
+  // ── ChatGPT plugin packaging ───────────────────────────────────────────────
+  async function extensionLogo() {
+    try { return new Uint8Array(await (await fetch(chrome.runtime.getURL('icons/icon-128.png'))).arrayBuffer()); } catch { return null; }
+  }
+  async function chatGptPluginFrom(blob, item) {
+    const skill = prepareSkillPackage(await readZip(await blob.arrayBuffer()));
+    return { skill, plugin: buildChatGptPlugin(skill, item, await extensionLogo()) };
+  }
+  function saveBytes(bytes, fileName) {
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   // ── Download (manual fallback) ─────────────────────────────────────────────
-  async function downloadItem(item, btn) {
+  async function downloadItem(item, btn, target = 'gemini') {
     if (!item || !currentSession?.token) {
       showNotice('Sesi atau paket tidak tersedia.', 'warn');
       return;
@@ -204,13 +226,14 @@
     if (btn) { btn.disabled = true; btn.textContent = 'Mengunduh…'; }
     try {
       const blob = await downloadPackage(item, currentSession.token);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${item.slug}-${item.version}.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showNotice('ZIP terunduh dan terverifikasi. Upload langsung ke Gemini, tidak perlu diekstrak.', 'good');
+      if (target === 'chatgpt') {
+        const { plugin } = await chatGptPluginFrom(blob, item);
+        saveBytes(plugin.zip, plugin.fileName);
+        showNotice('Plugin ChatGPT terunduh. Upload di chatgpt.com/plugins → + → Unggah plugin.', 'good');
+      } else {
+        saveBytes(new Uint8Array(await blob.arrayBuffer()), `${item.slug}-${item.version}.zip`);
+        showNotice('ZIP terunduh dan terverifikasi. Upload langsung ke Gemini, tidak perlu diekstrak.', 'good');
+      }
     } catch (err) {
       handleAuthError(err, 'Gagal mengunduh paket.');
     } finally {
@@ -218,27 +241,48 @@
     }
   }
 
-  // ── Assisted install ───────────────────────────────────────────────────────
-  const STEPS = [
-    'Cek akses Premium',
-    'Unduh & verifikasi paket',
-    'Siapkan file skill',
-    'Buka Gemini Skills',
-    'Isi form upload Gemini',
-    'Klik Buat di tab Gemini',
-  ];
-  const FAIL_REASONS = {
-    navigate: 'Halaman Gemini Skills tidak terbuka.',
-    upload_button: 'Tombol Upload Gemini tidak ditemukan (tampilan Gemini mungkin berubah, atau akun belum mendapat fitur Skills).',
-    upload_dialog: 'Dialog upload Gemini tidak terbuka.',
-    drop: 'Gemini menolak file yang dikirim.',
-    review_timeout: 'Gemini belum menampilkan halaman Review.',
+  // ── Assisted install (Gemini Skills or ChatGPT Plugins) ─────────────────────
+  const TARGETS = {
+    gemini: {
+      eyebrow: 'PASANG KE GEMINI',
+      steps: ['Cek akses Premium', 'Unduh & verifikasi paket', 'Siapkan file skill', 'Buka Gemini Skills', 'Isi form upload Gemini', 'Klik Buat di tab Gemini'],
+      failReasons: {
+        navigate: 'Halaman Gemini Skills tidak terbuka.',
+        upload_button: 'Tombol Upload Gemini tidak ditemukan (tampilan Gemini mungkin berubah, atau akun belum mendapat fitur Skills).',
+        upload_dialog: 'Dialog upload Gemini tidak terbuka.',
+        drop: 'Gemini menolak file yang dikirim.',
+        review_timeout: 'Gemini belum menampilkan halaman Review.',
+      },
+      waitTitle: 'Tinggal satu klik',
+      waitHint: 'Review isi skill di tab Gemini, lalu klik "Buat". Panel ini mendeteksi otomatis begitu skill muncul.',
+      pendingHint: 'Belum terdeteksi. Kalau sudah klik "Buat", buka gemini.google.com/skills lalu tekan ↻ di katalog.',
+      doneTitle: 'Terpasang di Gemini ✓',
+      doneHint: (name) => `Pakai di chat Gemini dengan mengetik / lalu pilih "${name}".`,
+    },
+    chatgpt: {
+      eyebrow: 'PASANG KE CHATGPT',
+      steps: ['Cek akses Premium', 'Unduh & verifikasi paket', 'Bungkus jadi plugin ChatGPT', 'Buka ChatGPT Plugins', 'Unggah plugin ke ChatGPT', 'Klik Instal Plugin di ChatGPT'],
+      failReasons: {
+        navigate: 'Halaman ChatGPT Plugins tidak terbuka.',
+        add_button: 'Tombol + di halaman Plugin tidak ditemukan. Pastikan sudah login di chatgpt.com.',
+        upload_menu: 'Menu "Unggah plugin" tidak muncul (akun mungkin belum mendapat fitur upload plugin).',
+        upload_dialog: 'Dialog unggah plugin tidak terbuka.',
+        import_failed: 'ChatGPT menolak plugin.',
+        import_timeout: 'ChatGPT belum menyelesaikan impor.',
+      },
+      waitTitle: 'Tinggal satu klik',
+      waitHint: 'Plugin sudah diimpor. Klik "Instal Plugin" di tab ChatGPT — panel ini mendeteksi otomatis.',
+      pendingHint: 'Belum terdeteksi terpasang. Kalau sudah klik "Instal Plugin", tekan ↻ di katalog.',
+      doneTitle: 'Terpasang di ChatGPT ✓',
+      doneHint: (_name, title) => `Pakai di chat ChatGPT dengan mengetik @ lalu pilih "${title}".`,
+    },
   };
   let installing = false;
+  let currentSteps = TARGETS.gemini.steps;
 
   function renderSteps(states) {
     const icon = { done: '✓', active: '•', fail: '!', wait: '' };
-    $('#install-steps').innerHTML = STEPS.map((label, i) => {
+    $('#install-steps').innerHTML = currentSteps.map((label, i) => {
       const st = states[i] || 'wait';
       return `<li class="step step-${st}"><span class="step-icon" aria-hidden="true">${icon[st]}</span><span>${esc(label)}</span></li>`;
     }).join('');
@@ -250,9 +294,11 @@
     text ? show(hint) : hide(hint);
   }
 
-  async function installItem(item) {
+  async function installItem(item, target = 'gemini') {
     if (installing) return;
     installing = true;
+    const cfg = TARGETS[target];
+    currentSteps = cfg.steps;
     const states = [];
     const step = (i, state) => { states[i] = state; renderSteps(states); };
     const fail = (i, message) => {
@@ -262,6 +308,8 @@
       show($('#install-manual'));
     };
     installSection.dataset.itemId = item.id;
+    installSection.dataset.target = target;
+    $('#install-eyebrow').textContent = cfg.eyebrow;
     $('#install-title').textContent = item.title || item.name || 'Skill';
     hide($('#install-manual'));
     setHint('');
@@ -288,38 +336,45 @@
 
       step(2, 'active');
       let skill;
-      try { skill = prepareSkillPackage(await readZip(await blob.arrayBuffer())); } catch (err) {
-        return fail(2, err.message || 'Paket tidak sesuai format Gemini Skills.');
+      let plugin = null;
+      try {
+        if (target === 'chatgpt') ({ skill, plugin } = await chatGptPluginFrom(blob, item));
+        else skill = prepareSkillPackage(await readZip(await blob.arrayBuffer()));
+      } catch (err) {
+        return fail(2, err.message || 'Paket tidak sesuai format skill.');
       }
       step(2, 'done');
 
       step(3, 'active');
       let result;
-      try { result = await assistInstall(skill); } catch (err) {
-        return fail(3, err.message || 'Gemini tidak bisa dibuka.');
+      try { result = target === 'chatgpt' ? await assistChatGptInstall(plugin) : await assistInstall(skill); } catch (err) {
+        return fail(3, err.message || 'Halaman tujuan tidak bisa dibuka.');
       }
       if (!result?.ok) {
         const at = result?.stage === 'navigate' ? 3 : 4;
         if (at === 4) step(3, 'done');
-        return fail(at, `${FAIL_REASONS[result?.stage] || 'Pengisian otomatis gagal.'} Gunakan cara manual: upload ZIP langsung.`);
+        const detail = result?.detail ? ` (${result.detail})` : '';
+        return fail(at, `${cfg.failReasons[result?.stage] || 'Pengisian otomatis gagal.'}${detail} Gunakan cara manual.`);
       }
       step(3, 'done');
       step(4, 'done');
 
       step(5, 'active');
-      $('#install-title').textContent = 'Tinggal satu klik';
-      setHint('Review isi skill di tab Gemini, lalu klik "Buat". Panel ini mendeteksi otomatis begitu skill muncul.', 'info');
-      const listed = await waitUntilListed(result.tabId, skill.name);
-      if (!listed) {
+      $('#install-title').textContent = cfg.waitTitle;
+      setHint(cfg.waitHint, 'info');
+      const installed = target === 'chatgpt'
+        ? await waitUntilChatGptInstalled(result.tabId, result.pluginId)
+        : await waitUntilListed(result.tabId, skill.name);
+      if (!installed) {
         step(5, 'wait');
         $('#install-title').textContent = 'Menunggu konfirmasi';
-        setHint('Belum terdeteksi. Kalau sudah klik "Buat", buka gemini.google.com/skills lalu tekan ↻ di katalog.', 'warn');
+        setHint(cfg.pendingHint, 'warn');
         return;
       }
       step(5, 'done');
-      await writeStatus(item.id, { name: skill.name, version: item.version, status: 'detected' });
-      $('#install-title').textContent = 'Terpasang di Gemini ✓';
-      setHint(`Pakai di chat Gemini dengan mengetik / lalu pilih "${skill.name}".`, 'good');
+      await writeStatus(item.id, { name: skill.name, version: item.version, status: 'detected', pluginId: result.pluginId || null }, target);
+      $('#install-title').textContent = cfg.doneTitle;
+      setHint(cfg.doneHint(skill.name, plugin?.manifest?.extensions?.['com.openai']?.interface?.displayName || item.title), 'good');
       renderCatalog();
     } finally {
       installing = false;
@@ -327,7 +382,7 @@
   }
 
   $('#install-close').addEventListener('click', () => { only(catalogSection); renderCatalog(); });
-  $('#install-manual').addEventListener('click', () => showTutorial('skill', installSection.dataset.itemId));
+  $('#install-manual').addEventListener('click', () => showTutorial('skill', installSection.dataset.itemId, installSection.dataset.target || 'gemini'));
 
   // ── Card actions (event delegation) ───────────────────────────────────────
   $('#catalog-grid').addEventListener('click', async (e) => {
@@ -339,10 +394,21 @@
     const type = card?.dataset.type || 'skill';
     const item = catalogItems.find(p => String(p.id) === String(id));
 
-    if (action === 'install') {
+    if (action === 'install' || action === 'install-chatgpt') {
       if (!item) return showNotice('Paket tidak tersedia.', 'warn');
       if (!item.file_size || !item.sha256) return showNotice('Paket belum tersedia untuk dipasang.', 'warn');
-      installItem(item);
+      if (action === 'install-chatgpt') {
+        // ChatGPT keeps uploaded personal plugins (no delete), so never upload a duplicate:
+        // same version → open it; newer version → guide to "Upload new version".
+        const known = (await readStatuses('chatgpt'))[item.id];
+        if (known?.status === 'detected' && known.pluginId) {
+          chrome.tabs.create({ url: `https://chatgpt.com/plugins/${encodeURIComponent(known.pluginId)}` });
+          if (known.version === item.version) return showNotice('Plugin sudah terpasang di ChatGPT — membuka halamannya.', 'good');
+          await downloadItem(item, btn, 'chatgpt');
+          return showNotice(`Versi ${item.version} siap. Di halaman plugin: Tindakan plugin → Unggah versi baru → pilih ZIP yang baru diunduh.`, 'warn');
+        }
+      }
+      installItem(item, action === 'install-chatgpt' ? 'chatgpt' : 'gemini');
     }
     if (action === 'open') {
       if (type === 'gem' && item?.gem_url) {
@@ -355,11 +421,21 @@
   });
 
   // ── Tutorial (manual fallback) ────────────────────────────────────────────
-  function showTutorial(type, itemId) {
-    const steps = typeof getManualSteps === 'function' ? getManualSteps(type) : ['Buka Gemini, lalu pasang secara manual.'];
+  function showTutorial(type, itemId, target = 'gemini') {
+    const chatgpt = target === 'chatgpt' && type !== 'gem';
+    const steps = chatgpt && typeof getChatGptManualSteps === 'function'
+      ? getChatGptManualSteps()
+      : typeof getManualSteps === 'function' ? getManualSteps(type) : ['Buka Gemini, lalu pasang secara manual.'];
     $('#tutorial-steps').innerHTML = steps.map(s => `<li>${esc(s)}</li>`).join('');
     tutorialSection.dataset.itemId = itemId;
     tutorialSection.dataset.itemType = type;
+    tutorialSection.dataset.target = chatgpt ? 'chatgpt' : 'gemini';
+    $('#tutorial-title').textContent = chatgpt ? 'Pasang di ChatGPT' : 'Pasang di Gemini';
+    $('#tutorial-download').textContent = chatgpt ? 'Download ZIP ChatGPT' : 'Download ZIP';
+    $('#tutorial-open').textContent = chatgpt ? 'Buka ChatGPT Plugins' : 'Buka Gemini Skills';
+    $('#tutorial-honesty').textContent = chatgpt
+      ? 'ChatGPT menerima ZIP plugin langsung. Konfirmasi akhir (klik Instal Plugin) selalu dilakukan member di ChatGPT.'
+      : 'Gemini menerima file ZIP langsung. Konfirmasi akhir (klik Buat) selalu dilakukan member di Gemini.';
     type === 'gem' ? hide($('#tutorial-download')) : show($('#tutorial-download'));
     only(tutorialSection);
   }
@@ -367,10 +443,11 @@
   $('#tutorial-close').addEventListener('click', () => only(catalogSection));
   $('#tutorial-download').addEventListener('click', (e) => {
     const item = catalogItems.find(p => String(p.id) === String(tutorialSection.dataset.itemId));
-    downloadItem(item, e.currentTarget);
+    downloadItem(item, e.currentTarget, tutorialSection.dataset.target || 'gemini');
   });
   $('#tutorial-open').addEventListener('click', () => {
     const type = tutorialSection.dataset.itemType || 'skill';
+    if (tutorialSection.dataset.target === 'chatgpt' && typeof openChatGptPluginsPage === 'function') return openChatGptPluginsPage();
     if (typeof openGeminiPage === 'function') openGeminiPage(type);
     else chrome.tabs.create({ url: 'https://gemini.google.com/skills' });
   });

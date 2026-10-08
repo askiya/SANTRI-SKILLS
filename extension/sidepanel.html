@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark"><img src="icons/icon-32.png" alt=""></span><div><strong>Santri Skills</strong><small>Gemini companion</small></div></div>
+    <div class="brand"><span class="brand-mark"><img src="icons/icon-32.png" alt=""></span><div><strong>Santri Skills</strong><small>Gemini &amp; ChatGPT companion</small></div></div>
     <button id="theme-toggle" class="icon-btn" aria-label="Ganti theme" title="Ganti theme">☼</button>
   </header>
 
@@ -55,7 +55,7 @@
 
     <section id="install" class="panel hidden" aria-labelledby="install-title" aria-live="polite">
       <button id="install-close" class="close-btn" aria-label="Tutup">×</button>
-      <span class="eyebrow">PASANG KE GEMINI</span>
+      <span id="install-eyebrow" class="eyebrow">PASANG KE GEMINI</span>
       <h2 id="install-title">Menyiapkan skill…</h2>
       <ol id="install-steps" class="install-steps"></ol>
       <p id="install-hint" class="install-hint hidden"></p>
@@ -67,7 +67,7 @@
       <span class="eyebrow">PANDUAN MANUAL</span>
       <h2 id="tutorial-title">Pasang di Gemini</h2>
       <ol id="tutorial-steps"></ol>
-      <p class="honesty">Gemini menerima file ZIP langsung. Konfirmasi akhir (klik Buat) selalu dilakukan member di Gemini.</p>
+      <p id="tutorial-honesty" class="honesty">Gemini menerima file ZIP langsung. Konfirmasi akhir (klik Buat) selalu dilakukan member di Gemini.</p>
       <button id="tutorial-download" class="btn btn-primary">Download ZIP</button>
       <button id="tutorial-open" class="btn btn-secondary">Buka Gemini Skills</button>
       <button id="member-confirm" class="btn btn-secondary">Saya sudah menyelesaikan</button>
@@ -81,6 +81,8 @@
   <script src="zip.js"></script>
   <script src="catalog.js"></script>
   <script src="gemini-adapter.js"></script>
+  <script src="chatgpt-plugin.js"></script>
+  <script src="chatgpt-adapter.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
