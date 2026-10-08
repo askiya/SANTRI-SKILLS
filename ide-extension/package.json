@@ -1,0 +1,99 @@
+{
+  "name": "santri-code",
+  "displayName": "Santri Code",
+  "description": "AI Flow Studio Santriverse di editor: susun PRD, ARCHITECTURE.md, SDLC, dan DESIGN.md lalu simpan langsung ke project (khusus Member Premium).",
+  "version": "0.1.0",
+  "publisher": "santriverse",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "homepage": "https://santriverse.my.id",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/askiya/SANTRI-SKILLS.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "santriverse",
+    "prd",
+    "architecture",
+    "sdlc",
+    "design.md",
+    "antigravity"
+  ],
+  "main": "./extension.js",
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "santriCode",
+          "title": "Santri Code",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "santriCode": [
+        {
+          "type": "webview",
+          "id": "santriCode.chat",
+          "name": "AI Flow Studio"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "santriCode.focus", "title": "Buka Chat", "category": "Santri Code" },
+      { "command": "santriCode.openPanel", "title": "Buka di Tab Editor", "category": "Santri Code", "icon": "$(link-external)" },
+      { "command": "santriCode.newChat", "title": "Chat Baru", "category": "Santri Code", "icon": "$(add)" },
+      { "command": "santriCode.login", "title": "Login Santriverse", "category": "Santri Code" },
+      { "command": "santriCode.logout", "title": "Keluar", "category": "Santri Code" },
+      { "command": "santriCode.startPrd", "title": "Mulai PRD & Product Spec", "category": "Santri Code" },
+      { "command": "santriCode.startArchitecture", "title": "Mulai System Architecture", "category": "Santri Code" },
+      { "command": "santriCode.startDesign", "title": "Mulai DESIGN.md Token System", "category": "Santri Code" },
+      { "command": "santriCode.startSdlc", "title": "Mulai SDLC Lifecycle Plan", "category": "Santri Code" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "santriCode.newChat", "when": "view == santriCode.chat", "group": "navigation@1" },
+        { "command": "santriCode.openPanel", "when": "view == santriCode.chat", "group": "navigation@2" },
+        { "command": "santriCode.logout", "when": "view == santriCode.chat", "group": "overflow" }
+      ]
+    },
+    "configuration": {
+      "title": "Santri Code",
+      "properties": {
+        "santriCode.documentsFolder": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Folder (relatif terhadap root workspace) tempat dokumen disimpan, mis. \"docs\". Kosong = root workspace."
+        },
+        "santriCode.siteUrl": {
+          "type": "string",
+          "default": "https://santriverse.my.id",
+          "scope": "application",
+          "description": "Alamat situs Santriverse untuk login. Ubah hanya untuk pengembangan lokal."
+        },
+        "santriCode.apiBaseUrl": {
+          "type": "string",
+          "default": "https://api.santriverse.my.id/api",
+          "scope": "application",
+          "description": "Alamat API Santriverse. Ubah hanya untuk pengembangan lokal."
+        }
+      }
+    }
+  }
+}

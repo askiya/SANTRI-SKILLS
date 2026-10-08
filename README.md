@@ -149,6 +149,20 @@ npx github:askiya/SANTRI-SKILLS app
 
 Build lokal (Windows x64): `npm run build:exe` → `dist/SantriHub.exe`; installer: `ISCC.exe /DAppVersion=0.2.0 installer\santrihub.iss` → `dist/SantriHub-Setup.exe`.
 
+## Santri Code untuk VS Code dan Antigravity
+
+Extension editor [`ide-extension/`](ide-extension/README.md): chat AI Flow Studio Santriverse di VS Code, Antigravity, Cursor, dan Windsurf untuk menyusun PRD, ARCHITECTURE.md, SDLC, dan DESIGN.md lalu menyimpannya langsung ke project. Khusus Member Premium; model, kredit, dan batas harian sama dengan AI Flow Studio di website.
+
+- Login lewat browser (`/skills/connect?client=code`, PKCE, callback `127.0.0.1`). Token sesi khusus chat disimpan di SecretStorage editor, berlaku 30 hari.
+- API: `/api/code/*` memakai controller chat AI Flow Studio yang sama, termasuk cek Premium dan kredit di server.
+
+```bash
+npm run build:ide   # dist/santri-code-<versi>.vsix
+npm run test:ide
+```
+
+Pasang: **Extensions → ⋯ → Install from VSIX…** di VS Code atau Antigravity, atau `code --install-extension dist/santri-code-0.1.0.vsix`. File yang sama bisa diunggah ke Open VSX (registry Antigravity/Cursor/Windsurf) dan VS Code Marketplace.
+
 ## Menambah repo skill dan MCP sendiri
 
 Dashboard menyediakan kolom **Tambahkan repo GitHub**: masukkan URL `https://github.com/owner/repo`, preview semua `SKILL.md`, pilih skill, lalu install. Repo pihak ketiga tidak dapat menambah atau menjalankan MCP.

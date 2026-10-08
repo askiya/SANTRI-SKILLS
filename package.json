@@ -28,6 +28,8 @@
     "build:exe": "node scripts/build-santrihub.js",
     "build:extension": "node scripts/build-extension.js",
     "store:assets": "node scripts/build-store-assets.js",
+    "build:ide": "node scripts/build-ide-extension.js",
+    "test:ide": "node --test test/ide-extension.test.js",
     "app": "node bin/cli.js app"
   },
   "keywords": [

@@ -85,7 +85,7 @@ function buildExtension({ outDir = DIST } = {}) {
   return { out, files, manifest: storeManifest, sha256: crypto.createHash('sha256').update(zip).digest('hex'), size: zip.length };
 }
 
-module.exports = { buildExtension, referencedFiles, EXCLUDE };
+module.exports = { buildExtension, referencedFiles, EXCLUDE, writeZip };
 
 if (require.main === module) {
   try {
