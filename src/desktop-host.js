@@ -7,6 +7,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { isExtensionLink } = require('./extensions');
+const { createUpdateChecker, downloadInstaller, runnerScript, isReleaseLink } = require('./update');
 
 const EDGE_PATHS = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
@@ -101,6 +102,7 @@ function isAllowedLoginUrl(raw, origin, website = websiteBase()) {
 const APP_SCRIPT = `(() => {
   'use strict';
   document.cookie = 'santrihub_app=1; path=/; SameSite=Strict';
+  document.documentElement.dataset.santrihubApp = '1';
   const say = (text) => { const el = document.getElementById('gate-feedback'); if (el) el.textContent = text; };
   const post = async (url, body) => {
     const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
@@ -167,7 +169,9 @@ const CALLBACK_PAGE = `<!doctype html><html lang="id"><head><meta charset="utf-8
  * Wrap the dashboard's request handler with the app-mode login routes.
  * Every other request (and all premium checks) still goes to the dashboard.
  */
-function attachBrowserLogin(server, { focus = () => {}, open = openExternal } = {}) {
+function attachBrowserLogin(server, { focus = () => {}, open = openExternal, update = null } = {}) {
+  // The dashboard offers "Update sekarang" only when this app can replace itself.
+  const appScript = update ? `${APP_SCRIPT}\ndocument.documentElement.dataset.santrihubUpdate = 'self';\n` : APP_SCRIPT;
   const dashboard = server.listeners('request');
   server.removeAllListeners('request');
   server.on('request', (req, res) => {
@@ -178,11 +182,21 @@ function attachBrowserLogin(server, { focus = () => {}, open = openExternal } = 
 
     if (req.method === 'GET' && pathname === '/__santrihub/desktop.js') {
       res.writeHead(200, { 'Content-Type': 'text/javascript', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' });
-      return res.end(APP_SCRIPT);
+      return res.end(appScript);
     }
     if (req.method === 'GET' && pathname === '/auth/callback') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'" });
       return res.end(CALLBACK_PAGE);
+    }
+    if (req.method === 'POST' && pathname === '/__santrihub/update') {
+      if (!sameOriginJson()) return json(403, { error: 'Ditolak.' });
+      req.resume();
+      if (!update) return json(409, { error: 'Pembaruan otomatis hanya tersedia di aplikasi SantriHub (SantriHub.exe).' });
+      Promise.resolve().then(update).then(
+        (result) => json(200, { ok: true, ...result }),
+        (error) => json(error?.status || 502, { error: error?.message || 'Pembaruan gagal.' }),
+      );
+      return undefined;
     }
     if (req.method === 'POST' && (pathname === '/__santrihub/open-login' || pathname === '/__santrihub/open-link' || pathname === '/__santrihub/focus')) {
       if (!sameOriginJson()) return json(403, { error: 'Ditolak.' });
@@ -193,8 +207,8 @@ function attachBrowserLogin(server, { focus = () => {}, open = openExternal } = 
         let url;
         try { url = JSON.parse(raw).url; } catch { url = null; }
         if (pathname === '/__santrihub/open-link') {
-          // Only the official store links listed in src/extensions.js.
-          if (!isExtensionLink(url)) return json(400, { error: 'Link tidak diizinkan.' });
+          // Only the official store links (src/extensions.js) and this repo's release pages.
+          if (!isExtensionLink(url) && !isReleaseLink(url)) return json(400, { error: 'Link tidak diizinkan.' });
           open(url);
           return json(200, { opened: true });
         }
@@ -277,8 +291,6 @@ function startDesktop({ version = '' } = {}) {
   const server = createDashboardServer({ cwd: process.cwd() });
   let lastRequest = Date.now();
   server.on('request', () => { lastRequest = Date.now(); });
-  attachBrowserLogin(server, { focus: () => focusWindow(profile) });
-
   let closing = false;
   let watcher = null;
   const close = () => {
@@ -296,6 +308,30 @@ function startDesktop({ version = '' } = {}) {
   process.on('SIGTERM', close);
   process.on('exit', () => { try { fs.rmSync(lockFile, { force: true }); } catch { /* exiting */ } });
   process.on('uncaughtException', (error) => { log(`uncaught: ${error?.stack || error}`); close(); });
+
+  // Self-update only for the installed SantriHub.exe (not `node bin/cli.js app`).
+  const packaged = /(^|[\\/])santrihub\.exe$/i.test(process.execPath);
+  const checkUpdate = createUpdateChecker({ current: version });
+  let updating = false;
+  const update = packaged ? async () => {
+    if (updating) throw Object.assign(new Error('Pembaruan sedang berjalan.'), { status: 409 });
+    const info = await checkUpdate();
+    if (!info.available) throw Object.assign(new Error('SantriHub sudah versi terbaru.'), { status: 409 });
+    updating = true;
+    try {
+      const installer = await downloadInstaller(`v${info.latest}`, path.join(data, 'updates'));
+      const script = runnerScript({ installer, exe: process.execPath, pid: process.pid, profile, log: path.join(data, 'santrihub.log') });
+      spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        { stdio: 'ignore', windowsHide: true, detached: true }).unref();
+      log(`update ${version} -> ${info.latest}`);
+      setTimeout(close, 1500).unref?.(); // let the dashboard show the confirmation first
+      return { version: info.latest };
+    } catch (error) {
+      updating = false;
+      throw error;
+    }
+  } : null;
+  attachBrowserLogin(server, { focus: () => focusWindow(profile), update });
 
   server.listen(0, '127.0.0.1', () => {
     const url = `http://127.0.0.1:${server.address().port}`;

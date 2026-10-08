@@ -64,6 +64,8 @@ function copyLocalSkills(skills, targets) {
 function mergeLocalMcp(file,entries){const result=mergeMcpEntries(file,entries);return {servers:Object.keys(result.mcpServers||{}),backup:result.backup}}
 const { detectTargets, validateCustomTargets, resolveTargets, resolveForWrite, findAntigravityExecutable } = require('./detect');
 const { EXTENSIONS } = require('./extensions');
+const { createUpdateChecker } = require('./update');
+const APP_VERSION = require('../package.json').version;
 
 const STATIC = {
   '/': { file: 'dashboard.html', type: 'text/html; charset=utf-8' },
@@ -80,7 +82,7 @@ const MAX_BODY = 16384;
 // Private entries for PATH checks; only safe metadata is sent in API responses.
 function configStatusNames(file) { try { const c = JSON.parse(fs.readFileSync(file, 'utf8') || '{}'); return c && c.mcpServers && typeof c.mcpServers === 'object' && !Array.isArray(c.mcpServers) ? Object.fromEntries(Object.entries(c.mcpServers).filter(([,entry])=>mcpKind(entry))) : {}; } catch { return {}; } }
 
-function createDashboardServer({ cwd = process.cwd(), home, env = process.env, apiUrl, websiteUrl, githubFetch = globalThis.fetch, sourceFetch = fetchSource, controlRunner = runControl, bridgeFile } = {}) {
+function createDashboardServer({ cwd = process.cwd(), home, env = process.env, apiUrl, websiteUrl, githubFetch = globalThis.fetch, sourceFetch = fetchSource, controlRunner = runControl, bridgeFile, updateCheck = createUpdateChecker({ current: APP_VERSION }) } = {}) {
   const session = createSession({ apiUrl, websiteUrl });
   const capabilityFile=bridgeFile||path.join(home||os.homedir(),'.santrihub','bridge.json');
   const reposFile=path.join(home||os.homedir(),'.santrihub','repos.json');
@@ -164,6 +166,8 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
 
       // Public catalog of official extensions (store links only, no member data).
       if (req.method === 'GET' && req.url === '/api/extensions') return send(200, { extensions: EXTENSIONS });
+      // Public: is a newer SantriHub release out? (cached; never blocks the dashboard)
+      if (req.method === 'GET' && req.url === '/api/update') return send(200, await updateCheck());
 
       if(req.method==='POST'&&req.url==='/api/verification/bridge'){
         await session.requirePremium();

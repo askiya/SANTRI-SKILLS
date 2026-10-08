@@ -41,6 +41,28 @@ function renderExtensions(list){const host=$('#extension-list');
 async function loadExtensions(){if(extensionsLoaded)return;try{const data=await getJson('/api/extensions');extensionsLoaded=true;renderExtensions(data.extensions||[])}catch(e){$('#extension-list').replaceChildren(el('p','muted','Daftar extension belum bisa dimuat. Coba lagi.'));fail(e)}}
 if(location.hash==='#extensions')loadExtensions();
 
+// ─ Update: /api/update compares this build with the latest GitHub release ─
+let updateInfo=null;
+const updateDialog=$('#update-dialog');
+const selfUpdate=()=>document.documentElement.dataset.santrihubUpdate==='self';
+async function checkUpdate(){try{updateInfo=await getJson('/api/update');const btn=$('#update-btn');
+  if(updateInfo.available){btn.textContent='⬆ Update v'+updateInfo.latest;btn.title='SantriHub v'+updateInfo.latest+' tersedia (terpasang v'+updateInfo.current+')';btn.hidden=false}}catch{/* offline: no button */}}
+function openUpdate(){if(!updateInfo)return;const self=selfUpdate();
+  $('#update-current').textContent='v'+updateInfo.current;$('#update-latest').textContent='v'+updateInfo.latest;
+  $('#update-notes').href=updateInfo.releaseUrl;$('#update-command').textContent=updateInfo.command;$('#update-feedback').textContent='';
+  show($('#update-self'),self);show($('#update-manual'),!self);show($('#update-now'),self);$('#update-now').disabled=false;$('#update-now').textContent='Update sekarang';
+  updateDialog.showModal()}
+$('#update-btn').onclick=openUpdate;
+$('#update-close').onclick=()=>updateDialog.close();
+$('#update-copy').onclick=async()=>{try{await navigator.clipboard.writeText(updateInfo.command);done('✓ Perintah update disalin.')}catch{fail(new Error('Clipboard tidak tersedia. Salin perintah secara manual.'))}};
+$('#update-now').onclick=async()=>{const btn=$('#update-now'),fb=$('#update-feedback');btn.disabled=true;btn.textContent='Mengunduh…';
+  fb.textContent='Mengunduh installer resmi v'+updateInfo.latest+' dan memeriksa SHA-256…';
+  try{const res=await fetch('/__santrihub/update',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const data=await res.json().catch(()=>({}));
+    if(!res.ok)throw new Error(data.error||'Pembaruan gagal ('+res.status+').');
+    btn.textContent='Memasang…';fb.textContent='Installer terverifikasi. SantriHub ditutup sebentar lalu terbuka lagi di v'+(data.version||updateInfo.latest)+'.';log('Pembaruan ke v'+(data.version||updateInfo.latest)+' dimulai.')}
+  catch(e){btn.disabled=false;btn.textContent='Coba lagi';fb.textContent=e.message;fail(e)}};
+checkUpdate();
+
 // ─ Navigation ─
 function go(page){if(!PAGES[page])page='home';$$('[data-page]').forEach(b=>b.dataset.page===page?b.setAttribute('aria-current','page'):b.removeAttribute('aria-current'));
   Object.keys(PAGES).forEach(p=>show($('#page-'+p),p===page));$('#crumb').textContent='Workspace / '+PAGES[page];

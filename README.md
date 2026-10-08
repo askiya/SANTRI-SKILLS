@@ -135,6 +135,13 @@ Dari terminal (Node.js 18.17+), jendela yang sama:
 npx github:askiya/SANTRI-SKILLS app
 ```
 
+### Pembaruan otomatis
+
+Saat rilis baru terbit, tombol **⬆ Update vX.Y.Z** muncul di top bar dashboard (dicek lewat redirect `releases/latest` GitHub, di-cache 1 jam).
+
+- **SantriHub.exe:** klik **Update sekarang** → installer resmi rilis itu diunduh, SHA-256-nya wajib cocok dengan `SHA256SUMS.txt` rilis yang sama, lalu dipasang senyap dan SantriHub terbuka lagi otomatis. Skill dan pengaturan tidak tersentuh.
+- **`npx santriverse-skills dashboard`:** dialog menampilkan perintah `npx santriverse-skills@latest dashboard` untuk disalin.
+
 ### Cara kerja `SantriHub.exe`
 
 `SantriHub.exe` adalah [Node.js Single Executable Application](https://nodejs.org/api/single-executable-applications.html). Seluruh aplikasi (`bin/`, `src/`, `registry.json`, aset) ikut di dalam exe dan diekstrak sekali ke `%LOCALAPPDATA%\SantriHubpp-<hash>`; build baru mendapat folder baru dan folder lama dibersihkan. `SantriHub.exe mcp-serve` menjalankan MCP stdio server, sehingga entri MCP yang ditulis dashboard tetap berlaku setelah update. Exe bertipe aplikasi GUI, jadi tidak membuka jendela console.

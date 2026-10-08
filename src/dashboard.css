@@ -575,3 +575,19 @@ body { font-size: 16px; line-height: 1.6; }
 .ext-steps li + li { margin-top:6px; }
 .extension-notes { margin-top:16px; }
 .extension-notes details + details { margin-top:12px; }
+
+/* ── SantriHub update ── */
+.update-cta { position:relative; min-height:38px; padding:0 14px; border:1px solid #a78bfa; border-radius:10px; background:linear-gradient(135deg,#7c3aed,#6366f1); color:#fff; font-size:12px; font-weight:700; cursor:pointer; box-shadow:0 0 0 1px #a78bfa40, 0 6px 18px -6px #7c3aed99; }
+.update-cta::after { content:''; position:absolute; top:-3px; right:-3px; width:9px; height:9px; border-radius:50%; background:#f472b6; box-shadow:0 0 0 2px rgb(var(--canvas)); animation:update-ping 1.6s ease-out infinite; }
+.update-cta:hover:not(:disabled) { filter:brightness(1.1); }
+.update-cta:focus-visible { outline:3px solid #c4b5fd; outline-offset:2px; }
+@keyframes update-ping { 0% { box-shadow:0 0 0 2px rgb(var(--canvas)), 0 0 0 2px #f472b680; } 100% { box-shadow:0 0 0 2px rgb(var(--canvas)), 0 0 0 10px #f472b600; } }
+.update-dialog { width:min(520px,calc(100% - 24px)); }
+.update-versions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px; font-size:13px; }
+.update-versions b { font-variant-numeric:tabular-nums; }
+.update-command { display:flex; align-items:center; gap:10px; margin-top:10px; }
+.update-command code { flex:1; min-width:0; padding:9px 12px; border-radius:10px; border:1px solid rgb(var(--line)); background:rgb(var(--canvas)); font-size:12px; overflow-wrap:anywhere; }
+.update-notes { display:inline-flex; align-items:center; text-decoration:none; color:inherit; }
+.update-dialog .wizard-primary { background:#6c3bf5; color:#fff; border:0; border-radius:24px; min-height:40px; padding:0 20px; font-weight:700; cursor:pointer; }
+.update-dialog .wizard-primary:disabled { opacity:.6; cursor:progress; }
+@media (prefers-reduced-motion: reduce) { .update-cta::after { animation:none; } }
