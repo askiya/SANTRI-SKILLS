@@ -1,6 +1,6 @@
 {
   "name": "santriverse-skills",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "One-command installer that connects Santriverse skill repositories (Apps Script + Monorepo guidelines) to Google Antigravity as Agent Skills or an MCP server.",
   "bin": {
     "santriverse-skills": "bin/cli.js"
@@ -18,7 +18,10 @@
     "!**/__pycache__/**",
     "!**/*.pyc",
     "!assets/banner.png",
-    "!assets/santrihub.ico"
+    "!assets/santrihub.ico",
+    "!scripts/build-extension.js",
+    "!scripts/build-store-assets.js",
+    "!scripts/build-ide-extension.js"
   ],
   "engines": {
     "node": ">=18.17"
