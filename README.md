@@ -22,9 +22,20 @@ CLI tanpa dependency runtime untuk memasang koleksi **Google Apps Script Skills*
 
 ## Instalasi
 
-> **Status npm:** paket `santriverse-skills` belum dipublikasikan ke npm. Perintah registry seperti `npm install -g santriverse-skills` dan `npx santriverse-skills` belum dapat digunakan sampai rilis npm pertama tersedia.
+[![npm](https://img.shields.io/npm/v/santriverse-skills)](https://www.npmjs.com/package/santriverse-skills)
 
-### Dari source — direkomendasikan saat ini
+### Dari npm — direkomendasikan
+
+```bash
+# Jalankan tanpa instalasi global
+npx santriverse-skills install
+
+# Atau instal global
+npm install --global santriverse-skills
+santriverse-skills install
+```
+
+### Dari source
 
 ```bash
 git clone https://github.com/askiya/SANTRI-SKILLS.git
@@ -46,26 +57,13 @@ Tanpa clone permanen, jalankan paket langsung dari GitHub:
 npx github:askiya/SANTRI-SKILLS install
 ```
 
-### Setelah paket tersedia di npm
-
-Perintah berikut baru berlaku setelah paket benar-benar dipublikasikan:
-
-```bash
-# Jalankan tanpa instalasi global
-npx santriverse-skills install
-
-# Atau instal global
-npm install --global santriverse-skills
-santriverse-skills install
-```
-
 ## Dashboard premium lokal
 
 Dashboard menyediakan katalog premium, preview repo GitHub, instalasi skill, katalog MCP, dan preset website React Bits lewat browser. Mode website bukan crawler: hanya URL persis `https://reactbits.dev/get-started/mcp` yang diterima. Preview tidak mengambil halaman dan tidak menjalankan `npx`:
 
 ```bash
-node bin/cli.js dashboard
-# Setelah rilis npm: npx santriverse-skills dashboard
+npx santriverse-skills dashboard
+# Dari source: node bin/cli.js dashboard
 ```
 
 Buka `http://127.0.0.1:4173`. Port dapat diganti (gunakan ini bila 4173 sedang dipakai):
@@ -296,10 +294,18 @@ Perubahan installer, dashboard, MCP server, atau metadata paket memerlukan rilis
 1. Ubah kode dan test.
 2. Naikkan versi di `package.json`.
 3. Verifikasi dengan `npm test` dan `npm pack --dry-run`.
-4. Buat tag/release GitHub.
-5. Jalankan `npm publish` setelah akses registry dan nama paket siap.
+4. Buat tag/release GitHub (`git tag vX.Y.Z && git push origin vX.Y.Z`).
+5. Publish ke npm dari clone bersih tag tersebut, oleh pemilik akun npm `nasimulaskiya`:
 
-Sebelum langkah 5 selesai, dokumentasi dan pengguna harus tetap memakai clone source atau spec GitHub `npx github:askiya/SANTRI-SKILLS`.
+```bash
+git clone --depth 1 --branch vX.Y.Z https://github.com/askiya/SANTRI-SKILLS.git santriverse-skills-release
+cd santriverse-skills-release
+npm test
+npm login
+npm publish --access public
+```
+
+Cocokkan `shasum` yang dicetak `npm publish` dengan `npm view santriverse-skills dist.shasum`.
 
 ## Keamanan dan batasan
 
