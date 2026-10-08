@@ -42,7 +42,7 @@
     currentSession = null;
     catalogItems = [];
     hide($('#logout-btn'));
-    $('#premium-text').textContent = message || 'Akun ini belum Premium. Upgrade untuk memasang Skills Santriverse langsung ke Gemini.';
+    $('#premium-text').textContent = message || 'Akun ini belum Premium. Upgrade untuk memasang Skills Santriverse langsung ke Gemini dan ChatGPT.';
     only(premiumSection);
   }
   function handleAuthError(error, fallback) {

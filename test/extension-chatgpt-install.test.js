@@ -94,7 +94,7 @@ test('manifest: ChatGPT host + content script, no extra Chrome permissions', () 
   const manifest = JSON.parse(read('manifest.json'));
   assert.ok(manifest.host_permissions.includes('https://chatgpt.com/*'));
   assert.ok(manifest.content_scripts.some(cs => cs.js.includes('chatgpt-plugins.js') && cs.matches.includes('https://chatgpt.com/*') && !cs.world));
-  assert.deepEqual([...manifest.permissions].sort(), ['activeTab', 'identity', 'sidePanel', 'storage']);
+  assert.deepEqual([...manifest.permissions].sort(), ['identity', 'sidePanel', 'storage']);
   const html = read('sidepanel.html');
   assert.ok(html.indexOf('chatgpt-plugin.js') > html.indexOf('zip.js'));
   assert.ok(html.includes('chatgpt-adapter.js'));

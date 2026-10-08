@@ -66,7 +66,16 @@ Fallback manual: **Download ZIP ChatGPT** → chatgpt.com/plugins → + → Ungg
 Dari root repository:
 
 ```bash
-node --test test/extension.test.js test/extension-security.test.js test/extension-member-flow.test.js test/extension-layout.test.js test/extension-gemini-install.test.js test/extension-chatgpt-install.test.js
+node --test test/extension.test.js test/extension-security.test.js test/extension-member-flow.test.js test/extension-layout.test.js test/extension-gemini-install.test.js test/extension-chatgpt-install.test.js test/extension-store-package.test.js
 ```
 
-Tidak ada runtime package tambahan, secret, build step, atau konfigurasi repository.
+Tidak ada runtime package tambahan, secret, atau konfigurasi repository. Load unpacked tidak butuh build step.
+
+## Chrome Web Store
+
+```bash
+npm run build:extension   # dist/santri-skills-extension-<versi>.zip, tanpa "key"
+npm run store:assets      # extension/store/*.png (butuh Google Chrome)
+```
+
+Web Store menolak field `key` dan memberi ID baru, jadi ZIP dibuat tanpa `key`; folder `extension/` tetap memakai key untuk load unpacked. Teks listing, jawaban form privasi, justifikasi izin, dan urutan submit ada di [`store/LISTING.md`](store/LISTING.md). Kebijakan privasi: https://santriverse.my.id/docs/santri-skills-privacy

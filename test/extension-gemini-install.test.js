@@ -186,7 +186,7 @@ test('manifest runs the bridge in the page world on Gemini only, with no new per
   const bridge = manifest.content_scripts.find(cs => cs.js.includes('gemini-skills-bridge.js'));
   assert.equal(bridge.world, 'MAIN');
   assert.deepEqual(bridge.matches, ['https://gemini.google.com/*']);
-  assert.deepEqual(manifest.permissions.sort(), ['activeTab', 'identity', 'sidePanel', 'storage']);
+  assert.deepEqual(manifest.permissions.sort(), ['identity', 'sidePanel', 'storage']);
   assert.ok(manifest.content_scripts.some(cs => cs.js.includes('gemini-skills.js') && !cs.world));
 });
 
