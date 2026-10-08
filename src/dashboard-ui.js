@@ -23,10 +23,28 @@ const confirmGlobal=what=>scope()!=='global'||confirm(`${what} ke scope GLOBAL: 
 $$('.logo-box img').forEach(img=>{const mark=()=>img.closest('.logo-box').classList.add('img-failed');
   img.addEventListener('error',mark);if(img.complete&&!img.naturalWidth)mark()});
 
+// ─ Extensions: official store links from src/extensions.js via /api/extensions ─
+let extensionsLoaded=false;
+function el(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!=null)node.textContent=text;return node}
+function renderExtensions(list){const host=$('#extension-list');
+  if(!list.length){host.replaceChildren(el('p','muted','Belum ada extension.'));return}
+  host.replaceChildren(...list.map(ext=>{const card=el('article','panel extension-card');card.dataset.extension=ext.id;
+    const head=el('div','ext-head');const logo=el('img','ext-logo');logo.src='/assets/santriverse-logo.webp';logo.alt='';
+    const title=el('div','ext-title');const name=el('h2',null,ext.name);const meta=el('div','ext-meta');meta.append(el('span','badge',ext.kind));if(ext.version)meta.append(el('span','muted','v'+ext.version));title.append(name,meta);head.append(logo,title);
+    const stores=el('div','ext-stores');for(const store of ext.stores||[]){const link=el('a','ext-store');link.href=store.url;link.target='_blank';link.rel='noopener noreferrer';link.dataset.external='';
+      link.append(el('strong',null,store.label),el('small',null,store.for||''));stores.append(link)}
+    card.append(head,el('p','ext-tagline',ext.tagline||''),stores);
+    if(ext.identifier){const row=el('div','ext-id');row.append(el('span','muted','ID editor'),el('code',null,ext.identifier));const copy=el('button','secondary','Salin ID');copy.type='button';
+      copy.onclick=async()=>{try{await navigator.clipboard.writeText(ext.identifier);done('✓ ID '+ext.identifier+' disalin.')}catch{fail(new Error('Clipboard tidak tersedia. Salin ID secara manual.'))}};row.append(copy);card.append(row)}
+    if(ext.steps?.length){const how=el('details','ext-steps');how.append(el('summary',null,'Cara pasang'));const ol=el('ol');for(const step of ext.steps)ol.append(el('li',null,step));how.append(ol);card.append(how)}
+    return card}))}
+async function loadExtensions(){if(extensionsLoaded)return;try{const data=await getJson('/api/extensions');extensionsLoaded=true;renderExtensions(data.extensions||[])}catch(e){$('#extension-list').replaceChildren(el('p','muted','Daftar extension belum bisa dimuat. Coba lagi.'));fail(e)}}
+if(location.hash==='#extensions')loadExtensions();
+
 // ─ Navigation ─
 function go(page){if(!PAGES[page])page='home';$$('[data-page]').forEach(b=>b.dataset.page===page?b.setAttribute('aria-current','page'):b.removeAttribute('aria-current'));
   Object.keys(PAGES).forEach(p=>show($('#page-'+p),p===page));$('#crumb').textContent='Workspace / '+PAGES[page];
-  if(location.hash!=='#'+page)history.replaceState(null,'','#'+page);closeNav();syncFx(page);stopStatusPoll();if(page==='status'&&csrf){loadStatus();loadTargets()}if(page==='repos'&&csrf)loadRepos()}
+  if(location.hash!=='#'+page)history.replaceState(null,'','#'+page);closeNav();syncFx(page);stopStatusPoll();if(page==='status'&&csrf){loadStatus();loadTargets()}if(page==='repos'&&csrf)loadRepos();if(page==='extensions')loadExtensions()}
 $$('[data-page]').forEach(b=>b.onclick=()=>go(b.dataset.page));
 $$('[data-rail-page]').forEach(b=>b.onclick=()=>{document.body.classList.remove('rail');go(b.dataset.railPage)});
 $$('[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));

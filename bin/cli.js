@@ -15,14 +15,20 @@ const {
   removeMcpServer,
 } = require('../src/install');
 
+// Flags that take a value also accept the space form: --port 5181 as well as --port=5181.
+const VALUE_FLAGS = new Set(['port']);
+
 function parse(argv) {
   const positional = [];
   const flags = {};
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
     if (!arg.startsWith('--')) positional.push(arg);
     else {
       const [key, ...rest] = arg.slice(2).split('=');
-      flags[key] = rest.length ? rest.join('=') : true;
+      if (rest.length) flags[key] = rest.join('=');
+      else if (VALUE_FLAGS.has(key) && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) flags[key] = argv[++i];
+      else flags[key] = true;
     }
   }
   return { command: positional[0] || 'help', flags };
@@ -128,7 +134,8 @@ async function main() {
   if (command === 'dashboard') {
     const { createDashboardServer } = require('../src/dashboard');
     const server = createDashboardServer({ cwd: process.cwd() });
-    const port = Number(flags.port) || 4173;
+    const port = flags.port === undefined ? 4173 : Number(flags.port);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('--port harus angka 1024-65535, mis. --port 5181.');
     server.listen(port, '127.0.0.1', () => {
       console.log(`  ${c.green('✓')} Dashboard aktif: ${c.bold(`http://127.0.0.1:${port}`)}`);
       console.log(`  ${c.dim('Tekan Ctrl+C untuk berhenti.')}\n`);

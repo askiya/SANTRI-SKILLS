@@ -63,6 +63,7 @@ function copyLocalSkills(skills, targets) {
 }
 function mergeLocalMcp(file,entries){const result=mergeMcpEntries(file,entries);return {servers:Object.keys(result.mcpServers||{}),backup:result.backup}}
 const { detectTargets, validateCustomTargets, resolveTargets, resolveForWrite, findAntigravityExecutable } = require('./detect');
+const { EXTENSIONS } = require('./extensions');
 
 const STATIC = {
   '/': { file: 'dashboard.html', type: 'text/html; charset=utf-8' },
@@ -160,6 +161,9 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         res.writeHead(200, headers);
         return res.end(fs.readFileSync(path.join(__dirname, stat.file)));
       }
+
+      // Public catalog of official extensions (store links only, no member data).
+      if (req.method === 'GET' && req.url === '/api/extensions') return send(200, { extensions: EXTENSIONS });
 
       if(req.method==='POST'&&req.url==='/api/verification/bridge'){
         await session.requirePremium();

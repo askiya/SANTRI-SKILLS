@@ -168,6 +168,10 @@ Pasang: **Extensions → ⋯ → Install from VSIX…** di VS Code atau Antigrav
 3. **VS Code Marketplace** (publisher `santriverse`): https://marketplace.visualstudio.com/manage → item Santri Code → **⋯ → Update** → upload VSIX. Rilis pertama: **New extension → Visual Studio Code**.
 4. **Open VSX** (Antigravity, Cursor, Windsurf): `npx ovsx publish dist/santri-code-<versi>.vsix -p <token>`. Token dibuat di open-vsx.org → Settings → Access Tokens, diketik langsung di terminal, tidak pernah disimpan di repo.
 
+### Menu Extensions di dashboard
+
+Halaman **Extensions** (dashboard dan SantriHub) menampilkan semua extension resmi beserta link tokonya. Daftarnya ada di satu file, [`src/extensions.js`](src/extensions.js): menambah extension baru cukup dengan menambah satu entri (nama, jenis, versi, deskripsi, link toko, langkah pasang). Di aplikasi SantriHub, link toko dibuka di browser default dan hanya URL yang tercantum di file itu yang diizinkan.
+
 ## Menambah repo skill dan MCP sendiri
 
 Dashboard menyediakan kolom **Tambahkan repo GitHub**: masukkan URL `https://github.com/owner/repo`, preview semua `SKILL.md`, pilih skill, lalu install. Repo pihak ketiga tidak dapat menambah atau menjalankan MCP.

@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
+const { isExtensionLink } = require('./extensions');
 
 const EDGE_PATHS = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
@@ -108,6 +109,13 @@ const APP_SCRIPT = `(() => {
     return data;
   };
   let poll = null;
+  // Store links (Chrome Web Store, Open VSX, VS Marketplace) open in the default browser.
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest && event.target.closest('a[data-external]');
+    if (!link) return;
+    event.preventDefault();
+    post('/__santrihub/open-link', { url: link.href }).catch((error) => say(error.message));
+  });
   document.addEventListener('click', async (event) => {
     const button = event.target.closest && event.target.closest('#login');
     if (!button) return;
@@ -176,7 +184,7 @@ function attachBrowserLogin(server, { focus = () => {}, open = openExternal } = 
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'" });
       return res.end(CALLBACK_PAGE);
     }
-    if (req.method === 'POST' && (pathname === '/__santrihub/open-login' || pathname === '/__santrihub/focus')) {
+    if (req.method === 'POST' && (pathname === '/__santrihub/open-login' || pathname === '/__santrihub/open-link' || pathname === '/__santrihub/focus')) {
       if (!sameOriginJson()) return json(403, { error: 'Ditolak.' });
       let raw = '';
       req.on('data', (chunk) => { raw += chunk; if (raw.length > 4096) req.destroy(); });
@@ -184,6 +192,12 @@ function attachBrowserLogin(server, { focus = () => {}, open = openExternal } = 
         if (pathname === '/__santrihub/focus') { focus(); return json(200, { ok: true }); }
         let url;
         try { url = JSON.parse(raw).url; } catch { url = null; }
+        if (pathname === '/__santrihub/open-link') {
+          // Only the official store links listed in src/extensions.js.
+          if (!isExtensionLink(url)) return json(400, { error: 'Link tidak diizinkan.' });
+          open(url);
+          return json(200, { opened: true });
+        }
         if (!isAllowedLoginUrl(url, origin)) return json(400, { error: 'URL login tidak diizinkan.' });
         open(url);
         return json(200, { opened: true });

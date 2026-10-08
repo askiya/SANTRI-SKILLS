@@ -71,3 +71,22 @@ test('catalog downloads both repos and installs skills (network)', { skip: 'Live
   assert.match(await callTool('get_skill', { id: 'pre-deploy-gate' }), /---/);
   assert.ok((await callTool('search_docs', { query: 'monorepo', limit: 3 })).length > 10);
 });
+
+test('dashboard --port accepts the space form and rejects invalid ports', async () => {
+  const { spawn } = require('node:child_process');
+  const cli = path.join(__dirname, '..', 'bin', 'cli.js');
+  const run = (args, until) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, NO_COLOR: '1' } });
+    let out = '';
+    const finish = () => { child.kill(); resolve(out); };
+    const onData = (d) => { out += d; if (until.test(out)) finish(); };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    child.on('exit', () => resolve(out));
+    setTimeout(finish, 15000).unref();
+  });
+  const port = String(40000 + Math.floor(Math.random() * 20000));
+  assert.match(await run(['dashboard', '--port', port], /Dashboard aktif/), new RegExp(`127\.0\.0\.1:${port}`));
+  assert.match(await run(['dashboard', '--port', 'abc'], /port harus/), /--port harus angka 1024-65535/);
+  assert.match(await run(['dashboard', '--port=1'], /port harus/), /--port harus angka 1024-65535/);
+});
