@@ -17,6 +17,8 @@ const { parseDocuments, fileNameFor, draftDocument } = require('../ide-extension
 const { createLogoResolver } = require('../ide-extension/src/logos');
 const { formatContext, composeMessage, splitMessage, visibleEntry, MAX_MESSAGE } = require('../ide-extension/src/context');
 const markdown = require('../ide-extension/media/markdown.js');
+const { pendingThoughtSteps, thoughtView } = require('../ide-extension/src/progress');
+const { Typewriter, nextSlice, commonPrefix } = require('../ide-extension/src/typewriter');
 const { buildIdeExtension } = require('../scripts/build-ide-extension');
 
 const realFetch = globalThis.fetch;
@@ -209,6 +211,68 @@ describe('chat run polling', () => {
   });
 });
 
+describe('progress (website parity)', () => {
+  test('queue milestones match the website', () => {
+    assert.deepEqual(pendingThoughtSteps(undefined, false), [{ text: 'Mengirim permintaan ke server', done: false }]);
+    assert.deepEqual(pendingThoughtSteps('queued', false, 'Buat PRD'), [
+      { text: 'Permintaan diterima server', done: true },
+      { text: 'Menunggu giliran worker', done: false },
+    ]);
+    assert.deepEqual(pendingThoughtSteps('running', false, 'Buatkan arsitektur'), [
+      { text: 'Permintaan diterima server', done: true },
+      { text: 'Worker mengambil permintaan', done: true },
+      { text: 'Menunggu hasil arsitektur', done: false },
+    ]);
+  });
+
+  test('staged document runs report plan, saved sections and the section being written', () => {
+    const steps = pendingThoughtSteps('running', false, '', { stage: 'writing', sections_total: 6, sections_completed: 2, current_section_title: 'Scope MVP' });
+    assert.deepEqual(steps.map((s) => s.text), ['Permintaan diterima server', 'Rencana dokumen dibuat · 6 bagian', 'Bagian 1–2 tersimpan', 'Menulis bagian 3/6 · Scope MVP']);
+    assert.equal(pendingThoughtSteps('running', false, '', { stage: 'planning' }).at(-1).text, 'Menyusun rencana dokumen');
+    assert.equal(pendingThoughtSteps('running', false, '', { stage: 'assembling', sections_total: 6, sections_completed: 6 }).at(-1).text, 'Menyusun dokumen final · 6 bagian');
+    const retry = pendingThoughtSteps('running', false, '', { stage: 'retrying', sections_total: 6, sections_completed: 2, retry_attempt: 1, retry_max: 3, retry_after: '2026-10-08T10:00:10Z' }, Date.parse('2026-10-08T10:00:00Z'));
+    assert.match(retry.at(-1).text, /mencoba kembali otomatis · Bagian 3\/6 · Percobaan 1\/3 · lanjut dalam 10s/);
+  });
+
+  test('labels follow the run status', () => {
+    assert.equal(thoughtView(null).label, 'Mengirim permintaan…');
+    assert.equal(thoughtView({ run: { status: 'queued' } }).label, 'Permintaan dalam antrean…');
+    assert.equal(thoughtView({ run: { status: 'running' } }).label, 'Model sedang memproses…');
+    assert.equal(thoughtView({ run: { status: 'running', stage: 'retrying' } }).label, 'Menunggu sebentar');
+  });
+});
+
+describe('typewriter', () => {
+  test('slices adapt to the backlog and never split a surrogate pair', () => {
+    assert.equal(nextSlice('abc'), 'abc');
+    assert.equal(nextSlice('x'.repeat(300)).length, 20);
+    assert.equal(nextSlice('abcde😀z', { min: 6 }), 'abcde😀');
+    assert.equal(commonPrefix('# A\nlama', '# A\nbaru'), 4);
+    assert.equal(commonPrefix('a😀', 'a😃'), 1);
+  });
+
+  test('types appended text, truncates a rewritten tail, and finishes exactly', async () => {
+    let doc = '# Judul\nlama';
+    const ops = [];
+    const tw = new Typewriter({ initial: doc, tickMs: 1, write: async (op) => {
+      ops.push(op.type);
+      doc = op.type === 'append' ? doc + op.text : doc.slice(0, op.offset);
+    } });
+    tw.setTarget('# Judul\nbaru dan panjang sekali '.repeat(3));
+    assert.equal(await tw.finish('# Judul\nbaru final'), true);
+    assert.equal(doc, '# Judul\nbaru final');
+    assert.ok(ops.includes('truncate') && ops.filter((o) => o === 'append').length > 1);
+  });
+
+  test('stops for good when the writer reports the member edited the file', async () => {
+    let calls = 0;
+    const tw = new Typewriter({ tickMs: 1, write: async () => (++calls < 3 ? true : false) });
+    assert.equal(await tw.finish('x'.repeat(500)), false);
+    assert.equal(calls, 3);
+    assert.equal(await tw.finish('lagi'), false);
+  });
+});
+
 describe('documents', () => {
   const answer = [
     'Berikut PRD-nya:',
@@ -376,6 +440,11 @@ describe('VSIX package', () => {
       assert.doesNotMatch(text, /\beval\s*\(|new Function\s*\(|<script[^>]+src="https?:/, file);
     }
     assert.equal(pkg.contributes.configuration.properties['santriCode.apiBaseUrl'].scope, 'application', 'workspace settings must not redirect the token');
+    assert.deepEqual(Object.keys(pkg.contributes.viewsContainers), ['secondarySidebar'], 'chat lives in the right sidebar');
+    assert.equal(pkg.contributes.views.santriCode[0].id, 'santriCode.chat');
+    assert.deepEqual(pkg.contributes.menus['editor/title'], [{ command: 'santriCode.focus', group: 'navigation@100' }], 'quick-open icon in the editor toolbar');
+    assert.equal(pkg.contributes.commands.find((c) => c.command === 'santriCode.focus').icon, '$(sparkle)');
+    assert.equal(pkg.contributes.keybindings[0].command, 'santriCode.focus');
     assert.equal(pkg.contributes.configuration.properties['santriCode.siteUrl'].scope, 'application');
   });
 });
@@ -388,8 +457,36 @@ describe('extension host (fake vscode)', () => {
   }
 
   function fakeVscode(workspaceDir, log) {
+    const docs = new Map(); // uri string → in-memory text document
+    log.docs = docs;
+    log.edits = [];
+    const openDoc = (uri) => {
+      const key = uri.toString();
+      const cached = docs.get(key);
+      if (cached) {
+        // Like VS Code: one document object per file; a clean one follows the disk.
+        if (!cached.isDirty && fs.existsSync(uri.fsPath)) cached.text = fs.readFileSync(uri.fsPath, 'utf8');
+        return cached;
+      }
+      const doc = {
+        uri, isClosed: false, isDirty: false, eol: log.crlf ? 2 : 1,
+        text: fs.existsSync(uri.fsPath) ? fs.readFileSync(uri.fsPath, 'utf8') : '',
+        getText() { return this.text; },
+        positionAt: (offset) => ({ offset }),
+        async save() { fs.writeFileSync(uri.fsPath, this.text); this.isDirty = false; return true; },
+      };
+      docs.set(key, doc);
+      return doc;
+    };
+    class WorkspaceEdit {
+      constructor() { this.ops = []; }
+      insert(uri, pos, text) { this.ops.push({ uri, start: pos.offset, end: pos.offset, text }); }
+      delete(uri, range) { this.ops.push({ uri, start: range.start.offset, end: range.end.offset, text: '' }); }
+      replace(uri, range, text) { this.ops.push({ uri, start: range.start.offset, end: range.end.offset, text }); }
+    }
     const secrets = new Map();
     const global = new Map();
+    const local = new Map();
     const handlers = { view: null, commands: new Map() };
     const vscode = {
       _secrets: secrets,
@@ -397,6 +494,10 @@ describe('extension host (fake vscode)', () => {
       StatusBarAlignment: { Right: 2 },
       ViewColumn: { Beside: -2 },
       FileType: { File: 1, Directory: 2 },
+      TextEditorRevealType: { Default: 0 },
+      EndOfLine: { LF: 1, CRLF: 2 },
+      WorkspaceEdit,
+      Range: class { constructor(start, end) { this.start = start; this.end = end; } },
       Uri: {
         file: makeUri,
         joinPath: (base, ...parts) => makeUri(path.join(base.fsPath, ...parts)),
@@ -413,8 +514,18 @@ describe('extension host (fake vscode)', () => {
         createWebviewPanel: () => assert.fail('not used'),
         showInformationMessage: async (m) => { log.info.push(m); },
         showWarningMessage: async (m, _o, ...choices) => { log.warn.push(m); return log.warnChoice ?? choices[0]; },
-        setStatusBarMessage: () => ({ dispose() {} }),
-        showTextDocument: async (doc) => { log.shown.push(doc.fsPath || doc.content); },
+        setStatusBarMessage: (m) => { log.status.push(m); return { dispose() {} }; },
+        showTextDocument: async (doc) => {
+          log.shown.push(doc.fsPath || doc.uri?.fsPath || doc.content);
+          return {
+            document: doc,
+            edit: async (cb) => {
+              cb({ setEndOfLine: (eol) => { doc.eol = eol; doc.text = eol === 1 ? doc.text.replace(/\r\n/g, '\n') : doc.text; doc.isDirty = true; } });
+              return true;
+            },
+          };
+        },
+        visibleTextEditors: [],
         showSaveDialog: async () => undefined,
         showWorkspaceFolderPick: async () => undefined,
         registerUriHandler: () => ({ dispose() {} }),
@@ -422,16 +533,34 @@ describe('extension host (fake vscode)', () => {
       },
       workspace: {
         workspaceFolders: [{ uri: makeUri(workspaceDir), name: 'kasir', index: 0 }],
-        getConfiguration: () => ({ get: (k) => ({ siteUrl: 'https://santriverse.my.id', apiBaseUrl: 'https://api.santriverse.my.id/api', documentsFolder: log.documentsFolder || '' }[k]) }),
+        getConfiguration: () => ({
+          get: (k, d) => {
+            const v = { siteUrl: 'https://santriverse.my.id', apiBaseUrl: 'https://api.santriverse.my.id/api', documentsFolder: log.documentsFolder || '', autoSaveDocuments: log.autoSave, typingAnimation: log.typing }[k];
+            return v === undefined ? d : v;
+          },
+        }),
+        get textDocuments() { return [...(log.textDocuments || []), ...docs.values()]; },
+        applyEdit: async (edit) => {
+          for (const op of edit.ops) {
+            const doc = openDoc(op.uri);
+            // Like VS Code: inserted line breaks follow the document's EOL.
+            const text = doc.eol === 2 ? op.text.replace(/\r?\n/g, '\r\n') : op.text;
+            doc.text = doc.text.slice(0, op.start) + text + doc.text.slice(op.end);
+            doc.isDirty = true;
+            log.edits.push({ file: path.basename(op.uri.fsPath), length: doc.text.length });
+          }
+          return true;
+        },
         asRelativePath: (uri) => path.relative(workspaceDir, uri.fsPath).replace(/\\/g, '/'),
         getWorkspaceFolder: () => undefined,
-        openTextDocument: async (opts) => opts,
+        openTextDocument: async (opts) => (opts?.fsPath ? openDoc(opts) : opts),
         onDidChangeConfiguration: () => ({ dispose() {} }),
         fs: {
           readFile: async (uri) => fs.readFileSync(uri.fsPath),
           writeFile: async (uri, data) => fs.writeFileSync(uri.fsPath, data),
           createDirectory: async (uri) => fs.mkdirSync(uri.fsPath, { recursive: true }),
           stat: async (uri) => fs.statSync(uri.fsPath),
+          delete: async (uri) => fs.rmSync(uri.fsPath, { force: true }),
           readDirectory: async (uri) => fs.readdirSync(uri.fsPath, { withFileTypes: true }).map((d) => [d.name, d.isDirectory() ? 2 : 1]),
         },
       },
@@ -446,12 +575,13 @@ describe('extension host (fake vscode)', () => {
       extension: { id: 'santriverse.santri-code', packageJSON: { version: '0.1.0' } },
       secrets: { get: async (k) => secrets.get(k), store: async (k, v) => { secrets.set(k, v); }, delete: async (k) => { secrets.delete(k); } },
       globalState: { get: (k, d) => (global.has(k) ? global.get(k) : d), update: async (k, v) => { global.set(k, v); } },
+      workspaceState: { get: (k, d) => (local.has(k) ? local.get(k) : d), update: async (k, v) => { local.set(k, v); } },
     };
     return { vscode, context };
   }
 
   function fakeApi(log) {
-    const prd = [':::document {"title":"PRD Kasir","kind":"prd","version":"1.0"}', '# PRD Kasir', '## Tujuan', 'Kasir cepat.', ':::enddocument'].join('\n');
+    const prd = () => [':::document {"title":"PRD Kasir","kind":"prd","version":"1.0"}', '# PRD Kasir', '## Tujuan', log.prdBody || 'Kasir cepat.', ':::enddocument'].join('\n');
     return async (url, init = {}) => {
       if (String(url).startsWith('http://127.0.0.1')) return realFetch(url, init);
       const u = new URL(url);
@@ -477,13 +607,19 @@ describe('extension host (fake vscode)', () => {
       if (u.pathname === '/api/code/chats' && method === 'POST') return jsonResponse(201, { conversation: { id: 'c1', title: JSON.parse(init.body).title, messages: [] } });
       if (u.pathname === '/api/code/chats/c1/send') {
         log.sent = { key: init.headers['Idempotency-Key'], body: JSON.parse(init.body) };
+        log.runs = (log.runs || 0) + 1;
         return jsonResponse(202, { run: { status: 'queued', idempotency_key: log.sent.key } });
+      }
+      if (u.pathname.startsWith('/api/code/chats/c1/runs/') && log.drafts?.length) {
+        const draft = log.drafts.shift();
+        if (draft === 'fail') return jsonResponse(200, { run: { status: 'failed' }, code: 'CHAT_AI_PROVIDER_FAILED', message: 'Provider gagal.', terminal: true });
+        return jsonResponse(200, { run: { status: 'running', stage: 'writing', sections_total: 2, sections_completed: draft.done, current_section_title: draft.title }, document_draft: draft.draft });
       }
       if (u.pathname.startsWith('/api/code/chats/c1/runs/')) {
         return jsonResponse(200, {
           run: { status: 'completed' },
-          user_message: { id: 'u1', role: 'user', content: log.sent.body.message },
-          assistant_message: { id: 'a1', role: 'assistant', content: `Ini PRD-nya.\n${prd}`, model: 'amanai/deepseek-v4.1-flash' },
+          user_message: { id: `u${log.runs}`, role: 'user', content: log.sent.body.message },
+          assistant_message: { id: `a${log.runs}`, role: 'assistant', content: `Ini PRD-nya.\n${prd()}`, model: 'amanai/deepseek-v4.1-flash' },
           usage: { credits_charged: 1 },
         });
       }
@@ -528,7 +664,7 @@ describe('extension host (fake vscode)', () => {
   }
 
   after(() => { globalThis.fetch = realFetch; });
-  const newLog = () => ({ api: [], opened: [], info: [], warn: [], shown: [], clipboard: [] });
+  const newLog = () => ({ api: [], opened: [], info: [], warn: [], shown: [], clipboard: [], status: [] });
 
   test('webview HTML is CSP-locked to nonce scripts and Santriverse image origins', async () => {
     const log = newLog();
@@ -587,6 +723,15 @@ describe('extension host (fake vscode)', () => {
     const doc = state.messages[1].segments.find((s) => s.type === 'document');
     assert.equal(doc.fileName, 'PRD.md');
     await until((s) => s.usage?.remaining === 19, 'usage refresh');
+    assert.equal(app.state.saved['a1:0'], 'PRD.md', 'auto-saved on completion');
+
+    // Same chat: no context again, and an approval goes out exactly as typed.
+    await send({ type: 'send', text: 'Tambahkan fitur retur' });
+    await until((s) => !s.pending && s.messages.length === 4, 'second answer');
+    assert.equal(log.sent.body.message, 'Tambahkan fitur retur');
+    await send({ type: 'send', text: 'ACC' });
+    await until((s) => !s.pending && s.messages.length === 6, 'approval answer');
+    assert.equal(log.sent.body.message, 'ACC');
 
     await send({ type: 'saveDoc', ref: 'a1:0' });
     const saved = fs.readFileSync(path.join(workspaceDir, 'PRD.md'), 'utf8');
@@ -606,6 +751,136 @@ describe('extension host (fake vscode)', () => {
     await send({ type: 'copyDoc', ref: 'a1:0' });
     assert.match(log.clipboard.at(-1), /# PRD Kasir/);
     await send({ type: 'saveDoc', ref: 'nope:9' });
+  });
+
+  test('an approval never carries project context, even as the first message', async () => {
+    const log = newLog();
+    const { send, until } = await boot(log, { token: 'code-token' });
+    await send({ type: 'ready' });
+    await until((s) => s.phase === 'ready', 'ready');
+    await send({ type: 'toggleContext' });
+    await send({ type: 'send', text: ' acc! ' });
+    await until((s) => !s.pending && s.messages.length === 2, 'answer');
+    assert.equal(log.sent.body.message, 'acc!');
+  });
+
+  test('finished documents land in the project automatically and never clobber edits', async () => {
+    const log = newLog();
+    const { app, send, until, workspaceDir } = await boot(log, { token: 'code-token' });
+    const file = (name) => path.join(workspaceDir, name);
+    await send({ type: 'ready' });
+    await until((s) => s.phase === 'ready', 'ready');
+
+    await send({ type: 'send', text: 'ACC' });
+    await until((s) => s.saved['a1:0'], 'auto-save 1');
+    assert.equal(fs.readFileSync(file('PRD.md'), 'utf8'), '# PRD Kasir\n## Tujuan\nKasir cepat.\n');
+    assert.ok(log.shown.includes(path.resolve(file('PRD.md'))), 'opened in the editor');
+    assert.match(log.status.at(-1), /menyimpan PRD\.md/);
+
+    log.prdBody = 'Kasir lebih cepat.';
+    await send({ type: 'send', text: 'Revisi tujuan' });
+    await until((s) => s.saved['a2:0'], 'auto-save 2');
+    assert.equal(fs.readFileSync(file('PRD.md'), 'utf8'), '# PRD Kasir\n## Tujuan\nKasir lebih cepat.\n', 'untouched file of ours is updated in place');
+    assert.equal(fs.existsSync(file('PRD-2.md')), false);
+
+    fs.appendFileSync(file('PRD.md'), 'Catatan saya.\n');
+    log.prdBody = 'Kasir offline.';
+    await send({ type: 'send', text: 'Revisi lagi' });
+    await until((s) => s.saved['a3:0'], 'auto-save 3');
+    assert.match(fs.readFileSync(file('PRD.md'), 'utf8'), /Catatan saya/, 'member edits are never overwritten');
+    assert.equal(fs.readFileSync(file('PRD-2.md'), 'utf8'), '# PRD Kasir\n## Tujuan\nKasir offline.\n');
+    assert.equal(app.state.saved['a3:0'], 'PRD-2.md');
+    assert.match(log.info.at(-1), /sudah kamu ubah.*PRD-2\.md/);
+
+    log.textDocuments = [{ uri: { toString: () => `file://${path.resolve(file('PRD-2.md')).replace(/\\/g, '/')}` }, isDirty: true }];
+    log.prdBody = 'Kasir multi cabang.';
+    await send({ type: 'send', text: 'Tambah cabang' });
+    await until((s) => s.saved['a4:0'], 'auto-save 4');
+    assert.equal(app.state.saved['a4:0'], 'PRD-3.md', 'unsaved editor changes are respected too');
+    log.textDocuments = [];
+
+    log.autoSave = false;
+    log.prdBody = 'Tidak disimpan otomatis.';
+    await send({ type: 'send', text: 'Tanpa auto-save' });
+    await until((s) => !s.pending && s.messages.length === 10, 'answer 5');
+    assert.equal(app.state.saved['a5:0'], undefined);
+    assert.equal(fs.readdirSync(workspaceDir).filter((f) => f.startsWith('PRD')).length, 3);
+
+    await send({ type: 'openSaved', ref: 'a1:0' });
+    assert.equal(log.shown.at(-1), path.resolve(file('PRD.md')));
+  });
+
+  test('a streamed document is typed live into its file, with website-style progress', async () => {
+    const log = newLog();
+    const { app, send, until, workspaceDir } = await boot(log, { token: 'code-token' });
+    await send({ type: 'ready' });
+    await until((s) => s.phase === 'ready', 'ready');
+    const section = (status, content) => ({ title: 'Tujuan', status, content });
+    log.drafts = [
+      { done: 0, title: 'Tujuan', draft: { title: 'PRD Kasir', kind: 'prd', version: '1.0', sections: [section('writing', '## Tujuan\nKasir'), { title: 'Scope', status: 'pending', content: null }] } },
+      { done: 1, title: 'Scope', draft: { title: 'PRD Kasir', kind: 'prd', version: '1.0', sections: [section('completed', '## Tujuan\nKasir cepat.'), { title: 'Scope', status: 'writing', content: '## Scope' }] } },
+    ];
+    const steps = [];
+    const sending = send({ type: 'send', text: 'ACC' });
+    await until((s) => { if (s.pending?.steps) steps.push(s.pending.steps.map((x) => x.text).join(' | ')); return s.saved['a1:0']; }, 'live save');
+    await sending;
+    const file = path.join(workspaceDir, 'PRD.md');
+    assert.equal(fs.readFileSync(file, 'utf8'), '# PRD Kasir\n## Tujuan\nKasir cepat.\n', 'final document saved');
+    const typed = log.edits.filter((e) => e.file === 'PRD.md');
+    assert.ok(typed.length > 3, `typed in several edits (${typed.length})`);
+    assert.ok(typed.some((e) => e.length < 20), 'file was written while the AI was still writing');
+    assert.ok(steps.some((s) => s.includes('Menulis bagian 1/2 · Tujuan')), steps.join('\n'));
+    assert.ok(steps.some((s) => s.includes('Bagian 1–1 tersimpan')));
+    assert.equal(log.docs.get(`file://${path.resolve(file).replace(/\\/g, '/')}`).isDirty, false);
+  });
+
+  test('CRLF editors (Windows) are typed to the end and saved as LF', async () => {
+    const log = { ...newLog(), crlf: true };
+    const { app, send, until, workspaceDir } = await boot(log, { token: 'code-token' });
+    await send({ type: 'ready' });
+    await until((s) => s.phase === 'ready', 'ready');
+    log.drafts = [
+      { done: 0, title: 'Tujuan', draft: { title: 'PRD Kasir', kind: 'prd', version: '1.0', sections: [{ title: 'Tujuan', status: 'writing', content: '## Tujuan\nKasir' }] } },
+    ];
+    await send({ type: 'send', text: 'ACC' });
+    await until((s) => s.saved['a1:0'], 'saved');
+    const file = path.join(workspaceDir, 'PRD.md');
+    assert.equal(app.state.saved['a1:0'], 'PRD.md', 'not mistaken for a member edit');
+    assert.equal(fs.readFileSync(file, 'utf8'), '# PRD Kasir\n## Tujuan\nKasir cepat.\n');
+
+    // A CRLF copy of our own file is still ours: the next revision updates it in place.
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/\n/g, '\r\n'));
+    log.prdBody = 'Kasir revisi.';
+    await send({ type: 'send', text: 'Revisi' });
+    await until((s) => s.saved['a2:0'], 'saved 2');
+    assert.equal(app.state.saved['a2:0'], 'PRD.md');
+    assert.equal(fs.existsSync(path.join(workspaceDir, 'PRD-2.md')), false);
+  });
+
+  test('a failed run puts the live file back (new file removed)', async () => {
+    const log = newLog();
+    const { send, until, workspaceDir } = await boot(log, { token: 'code-token' });
+    await send({ type: 'ready' });
+    await until((s) => s.phase === 'ready', 'ready');
+    log.drafts = [
+      { done: 0, title: 'Tujuan', draft: { title: 'Arsitektur', kind: 'architecture', version: '1.0', sections: [{ title: 'Tujuan', status: 'writing', content: '## Tujuan\nSetengah jalan' }] } },
+      'fail',
+    ];
+    await send({ type: 'send', text: 'ACC' });
+    await until((s) => !s.pending && s.error, 'failure');
+    assert.ok(log.edits.some((e) => e.file === 'ARCHITECTURE.md'), 'was typing live');
+    assert.equal(fs.existsSync(path.join(workspaceDir, 'ARCHITECTURE.md')), false);
+  });
+
+  test('typing animation off writes the file in one go', async () => {
+    const log = { ...newLog(), typing: false };
+    const { send, until, workspaceDir } = await boot(log, { token: 'code-token' });
+    await send({ type: 'ready' });
+    await until((s) => s.phase === 'ready', 'ready');
+    await send({ type: 'send', text: 'ACC' });
+    await until((s) => s.saved['a1:0'], 'saved');
+    assert.equal(log.edits.length, 0);
+    assert.equal(fs.readFileSync(path.join(workspaceDir, 'PRD.md'), 'utf8'), '# PRD Kasir\n## Tujuan\nKasir cepat.\n');
   });
 
   test('a 401 signs out and forgets the token', async () => {

@@ -31,7 +31,7 @@ function listFiles(dir, base = '') {
 /** Files referenced by package.json that must ship. */
 function requiredFiles(pkg) {
   const files = new Set(['package.json', pkg.main.replace(/^\.\//, ''), pkg.icon]);
-  for (const container of pkg.contributes?.viewsContainers?.activitybar || []) files.add(container.icon);
+  for (const containers of Object.values(pkg.contributes?.viewsContainers || {})) for (const c of containers) files.add(c.icon);
   return [...files];
 }
 

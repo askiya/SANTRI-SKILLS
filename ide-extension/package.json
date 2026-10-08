@@ -2,7 +2,7 @@
   "name": "santri-code",
   "displayName": "Santri Code",
   "description": "AI Flow Studio Santriverse di editor: susun PRD, ARCHITECTURE.md, SDLC, dan DESIGN.md lalu simpan langsung ke project (khusus Member Premium).",
-  "version": "0.1.0",
+  "version": "0.1.6",
   "publisher": "santriverse",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -37,7 +37,7 @@
   ],
   "contributes": {
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "santriCode",
           "title": "Santri Code",
@@ -55,21 +55,78 @@
       ]
     },
     "commands": [
-      { "command": "santriCode.focus", "title": "Buka Chat", "category": "Santri Code" },
-      { "command": "santriCode.openPanel", "title": "Buka di Tab Editor", "category": "Santri Code", "icon": "$(link-external)" },
-      { "command": "santriCode.newChat", "title": "Chat Baru", "category": "Santri Code", "icon": "$(add)" },
-      { "command": "santriCode.login", "title": "Login Santriverse", "category": "Santri Code" },
-      { "command": "santriCode.logout", "title": "Keluar", "category": "Santri Code" },
-      { "command": "santriCode.startPrd", "title": "Mulai PRD & Product Spec", "category": "Santri Code" },
-      { "command": "santriCode.startArchitecture", "title": "Mulai System Architecture", "category": "Santri Code" },
-      { "command": "santriCode.startDesign", "title": "Mulai DESIGN.md Token System", "category": "Santri Code" },
-      { "command": "santriCode.startSdlc", "title": "Mulai SDLC Lifecycle Plan", "category": "Santri Code" }
+      {
+        "command": "santriCode.focus",
+        "title": "Buka Chat",
+        "category": "Santri Code",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "santriCode.openPanel",
+        "title": "Buka di Tab Editor",
+        "category": "Santri Code",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "santriCode.newChat",
+        "title": "Chat Baru",
+        "category": "Santri Code",
+        "icon": "$(add)"
+      },
+      {
+        "command": "santriCode.login",
+        "title": "Login Santriverse",
+        "category": "Santri Code"
+      },
+      {
+        "command": "santriCode.logout",
+        "title": "Keluar",
+        "category": "Santri Code"
+      },
+      {
+        "command": "santriCode.startPrd",
+        "title": "Mulai PRD & Product Spec",
+        "category": "Santri Code"
+      },
+      {
+        "command": "santriCode.startArchitecture",
+        "title": "Mulai System Architecture",
+        "category": "Santri Code"
+      },
+      {
+        "command": "santriCode.startDesign",
+        "title": "Mulai DESIGN.md Token System",
+        "category": "Santri Code"
+      },
+      {
+        "command": "santriCode.startSdlc",
+        "title": "Mulai SDLC Lifecycle Plan",
+        "category": "Santri Code"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "santriCode.newChat", "when": "view == santriCode.chat", "group": "navigation@1" },
-        { "command": "santriCode.openPanel", "when": "view == santriCode.chat", "group": "navigation@2" },
-        { "command": "santriCode.logout", "when": "view == santriCode.chat", "group": "overflow" }
+        {
+          "command": "santriCode.newChat",
+          "when": "view == santriCode.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "santriCode.openPanel",
+          "when": "view == santriCode.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "santriCode.logout",
+          "when": "view == santriCode.chat",
+          "group": "overflow"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "santriCode.focus",
+          "group": "navigation@100"
+        }
       ]
     },
     "configuration": {
@@ -80,6 +137,18 @@
           "default": "",
           "scope": "resource",
           "description": "Folder (relatif terhadap root workspace) tempat dokumen disimpan, mis. \"docs\". Kosong = root workspace."
+        },
+        "santriCode.autoSaveDocuments": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Simpan dokumen final (PRD.md, ARCHITECTURE.md, SDLC.md, DESIGN.md) ke project secara otomatis begitu AI selesai menulis. File yang sudah kamu ubah tidak pernah ditimpa; versi baru disimpan sebagai NAMA-2.md."
+        },
+        "santriCode.typingAnimation": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Ketik dokumen langsung di editor secara realtime saat AI menulisnya (seperti canvas di AI Flow Studio). Matikan untuk menulis file sekaligus di akhir."
         },
         "santriCode.siteUrl": {
           "type": "string",
@@ -94,6 +163,13 @@
           "description": "Alamat API Santriverse. Ubah hanya untuk pengembangan lokal."
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "santriCode.focus",
+        "key": "ctrl+shift+alt+s",
+        "mac": "ctrl+cmd+s"
+      }
+    ]
   }
 }

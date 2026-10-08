@@ -108,6 +108,7 @@ button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 1px sol
 .doc-title { min-width: 0; flex: 1; }
 .doc-title strong { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .doc-title small { color: var(--sv-muted); font-size: 11px; }
+.doc-title .saved { color: var(--sv-good); font-weight: 600; }
 .doc-body { position: relative; max-height: 230px; overflow: hidden; padding: 0 14px; border-top: 1px solid var(--sv-border); font-size: 12px; }
 .doc-body.open { max-height: none; }
 .doc-body:not(.open)::after { content: ""; position: absolute; inset: auto 0 0; height: 60px; background: linear-gradient(transparent, var(--sv-card)); pointer-events: none; }
@@ -183,4 +184,40 @@ button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 1px sol
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* ── ThoughtLattice (port of the website's AI chat progress) ── */
+.tl { --tl-line: color-mix(in srgb, var(--sv-fg) 18%, transparent); --tl-muted: color-mix(in srgb, var(--sv-fg) 55%, transparent); --tl-ease: cubic-bezier(.23, 1, .32, 1); display: flex; flex-direction: column; margin: 2px 0 8px; font-size: 12.5px; }
+.tl-head { display: inline-flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; margin-left: -6px; padding: 4px 6px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: left; }
+button.tl-head:hover { background: color-mix(in srgb, var(--sv-fg) 7%, transparent); }
+.tl-star { flex: none; fill: currentColor; opacity: .72; }
+.tl[data-status="working"] .tl-star { opacity: .9; animation: tl-breathe 1.8s ease-in-out infinite; }
+.tl[data-status="done"] .tl-star { color: var(--sv-good); }
+.tl-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 500; }
+.tl-label.shimmer { background-image: linear-gradient(90deg, color-mix(in srgb, currentColor 55%, transparent) 25%, currentColor 50%, color-mix(in srgb, currentColor 55%, transparent) 75%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: tl-shimmer 1.4s linear infinite; }
+.tl-timer { flex: none; color: var(--tl-muted); font-family: var(--vscode-editor-font-family); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tl-chevron { width: 14px; height: 14px; flex: none; opacity: .55; transition: transform .3s var(--tl-ease); }
+.tl[data-open] .tl-chevron { transform: rotate(180deg); }
+.tl-trace { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .4s var(--tl-ease), opacity .3s ease; }
+.tl[data-open] .tl-trace { grid-template-rows: 1fr; opacity: 1; }
+.tl-steps { position: relative; min-height: 0; overflow: hidden; margin: 2px 0 0 5px; padding: 2px 0 2px 16px; }
+.tl-line { position: absolute; top: -6px; bottom: 6px; left: 3px; width: 1px; background: var(--tl-line); }
+.tl-step { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 2px 6px; border-radius: 6px; color: var(--tl-muted); }
+.tl-step[data-done] { color: color-mix(in srgb, var(--sv-fg) 88%, transparent); }
+.tl-step.tl-enter { animation: tl-enter .32s var(--tl-ease) var(--tl-delay, 0ms) both; }
+.tl-check { display: inline-flex; color: var(--sv-good); flex: none; }
+.tl-pending { width: 12px; height: 12px; flex: none; border: 1.5px solid var(--tl-line); border-top-color: var(--tl-muted); border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes tl-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@keyframes tl-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes tl-breathe { 0%, 100% { opacity: .58; transform: scale(.94); } 50% { opacity: .95; transform: scale(1); } }
+
+/* ── Live document card (typed as the AI writes) ── */
+.doc.live { border-style: dashed; }
+.doc-body.open-live { max-height: 260px; overflow-y: auto; }
+.doc-body.open-live::after { display: none; }
+.caret { display: inline-block; width: 7px; height: 1.05em; margin-left: 1px; vertical-align: text-bottom; border-radius: 1px; background: var(--sv-accent); animation: caret-blink 1s steps(2, start) infinite; }
+@keyframes caret-blink { to { visibility: hidden; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-label.shimmer { background: none; -webkit-text-fill-color: currentColor; }
 }
