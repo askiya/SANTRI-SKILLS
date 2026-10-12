@@ -8,7 +8,7 @@ const EXTENSIONS = [
     id: 'santri-skills',
     name: 'Santri Skills',
     kind: 'Chrome extension',
-    version: '0.3.0',
+    version: '0.3.1',
     tagline: 'Pasang Skill premium Santriverse ke Gemini dan ChatGPT dalam 2 klik, langsung dari side panel Chrome.',
     stores: [
       {

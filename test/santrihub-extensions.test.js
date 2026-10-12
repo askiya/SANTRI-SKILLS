@@ -98,3 +98,15 @@ test('app mode opens catalog store links in the default browser only',async()=>{
     await new Promise(r=>server.close(r));
   }
 });
+
+test('UI fonts never depend on a locally installed "Inter" (it can be a symbol font)',()=>{
+  // A member's PC had a font named "Inter" whose glyphs are pictograms: the whole SantriHub
+  // dashboard rendered as symbols. Only system font families are allowed without @font-face.
+  for(const file of ['src/dashboard.css','extension/sidepanel.css']){
+    const css=fs.readFileSync(path.join(ROOT,file),'utf8');
+    const stacks=[...css.matchAll(/font(?:-family)?\s*:\s*([^;}]+)/g)].map(m=>m[1]);
+    assert.ok(stacks.length>0,file);
+    for(const stack of stacks)assert.doesNotMatch(stack,/\bInter\b/,`${file}: ${stack}`);
+    assert.doesNotMatch(css,/@font-face/,'no web fonts: the CSP blocks them and they would need bundling');
+  }
+});
