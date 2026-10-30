@@ -8,21 +8,27 @@
   <img alt="Tested dengan node --test" src="https://img.shields.io/badge/tests-node%20--test-brightgreen">
   <img alt="Node.js 18.17 atau lebih baru" src="https://img.shields.io/badge/node-%3E%3D18.17-339933?logo=nodedotjs&logoColor=white">
   <a href="LICENSE"><img alt="Lisensi MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="https://www.npmjs.com/package/santriverse-skills"><img alt="Versi npm" src="https://img.shields.io/npm/v/santriverse-skills?logo=npm&logoColor=white"></a>
+  <a href="https://www.npmjs.com/package/santriverse-skills"><img alt="Versi npm" src="https://img.shields.io/npm/v/santriverse-skills?logo=npm&logoColor=white&cacheSeconds=3600"></a>
+  <a href="https://github.com/askiya/SANTRI-SKILLS/releases/latest"><img alt="Rilis SantriHub terbaru" src="https://img.shields.io/github/v/release/askiya/SANTRI-SKILLS?label=SantriHub&cacheSeconds=3600"></a>
 </p>
 
-CLI tanpa dependency runtime untuk memasang koleksi **Google Apps Script Skills** dan **Pedoman Monorepo Santriverse** ke Google Antigravity sebagai Agent Skills atau MCP server. Katalog bawaan berasal dari [`registry.json`](registry.json). Pengguna juga dapat memasang katalog lokal terverifikasi sendiri melalui `SANTRI_SKILLS_REGISTRY`; URL katalog jarak jauh sengaja belum diterima sampai tersedia signature/pinning agar daftar perintah MCP tidak menjadi celah supply-chain.
+**SantriHub** adalah pusat skill dan MCP untuk AI agent: satu aplikasi untuk memasang koleksi **Google Apps Script Skills** dan **Pedoman Monorepo Santriverse**, skill Anda sendiri (dari repository GitHub mana pun atau Markdown), dan MCP server ke **Google Antigravity, Claude Code, Codex, Gemini CLI, Cursor, VS Code (Copilot), dan Windsurf**, dengan pilihan aktif per agent. Tersedia sebagai aplikasi Windows, lewat browser di macOS/Linux, dan sebagai CLI `santriverse-skills` tanpa dependency runtime.
+
+Panduan untuk member: **[PANDUAN-INSTALASI.md](PANDUAN-INSTALASI.md)**.
+
+Katalog bawaan berasal dari [`registry.json`](registry.json). Pengguna juga dapat memasang katalog lokal terverifikasi sendiri melalui `SANTRI_SKILLS_REGISTRY`; URL katalog jarak jauh sengaja belum diterima sampai tersedia signature/pinning agar daftar perintah MCP tidak menjadi celah supply-chain.
 
 ## Prasyarat
 
-- Node.js **18.17 atau lebih baru**
-- Git
-- Koneksi internet saat katalog perlu diunduh atau diperbarui
-- Google Antigravity untuk memakai skill hasil instalasi
+- **Aplikasi Windows (installer):** Windows 10/11 (x64 atau ARM64). Node.js dan Git tidak perlu dipasang.
+- **CLI / `npx` / macOS / Linux:** Node.js **18.17 atau lebih baru**.
+- **Dari source:** Git dan Node.js 18.17+.
+- Koneksi internet saat katalog atau skill perlu diunduh atau diperbarui.
+- Minimal satu AI agent (Antigravity, Claude Code, Codex, Gemini CLI, Cursor, VS Code, atau Windsurf) untuk memakai skill dan MCP hasil instalasi.
 
 ## Instalasi
 
-[![npm](https://img.shields.io/npm/v/santriverse-skills)](https://www.npmjs.com/package/santriverse-skills)
+[![npm](https://img.shields.io/npm/v/santriverse-skills?cacheSeconds=3600)](https://www.npmjs.com/package/santriverse-skills)
 
 ### Dari npm — direkomendasikan
 
