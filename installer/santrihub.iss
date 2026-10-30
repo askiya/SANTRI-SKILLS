@@ -71,6 +71,9 @@ Name: "{autodesktop}\SantriHub"; Filename: "{app}\runtime\node.exe"; Parameters:
 
 [Run]
 Filename: "{app}\runtime\node.exe"; Parameters: """{app}\app\bin\cli.js"" app"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,SantriHub}"; Flags: nowait postinstall skipifsilent runminimized
+; In-app update from 0.2.x: its runner reopens SantriHub.exe, which [InstallDelete] removed,
+; so the installer reopens SantriHub itself. Newer runners reopen node.exe on their own.
+Filename: "{app}\runtime\node.exe"; Parameters: """{app}\app\bin\cli.js"" app"; WorkingDir: "{app}"; Flags: nowait skipifnotsilent runminimized; Check: UpgradedFromSingleExe
 
 [UninstallRun]
 ; Stop SantriHub and its MCP server (only node.exe of this install, never other Node.js programs).
@@ -82,3 +85,19 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM SantriHub.exe"; Flags: runhi
 ; App window profile, lock and log. Installed skills and the MCP configs of the
 ; AI agents (e.g. the user's .gemini folder) are left untouched.
 Type: filesandordirs; Name: "{localappdata}\SantriHub"
+
+[Code]
+var
+  HadSingleExe: Boolean;
+
+// Runs before [InstallDelete]: remember whether this is an upgrade of a 0.2.x install.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  HadSingleExe := FileExists(ExpandConstant('{app}\SantriHub.exe'));
+  Result := '';
+end;
+
+function UpgradedFromSingleExe: Boolean;
+begin
+  Result := HadSingleExe;
+end;

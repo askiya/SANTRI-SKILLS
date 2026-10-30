@@ -186,6 +186,17 @@ test('installer: per-user, official node.exe per CPU, shortcuts run the app, cle
   assert.ok(fs.existsSync(path.join(ROOT, 'assets', 'santrihub.ico')));
 });
 
+test('installer reopens SantriHub after an in-app update from 0.2.x only', () => {
+  const iss = read('installer/santrihub.iss');
+  // 0.2.x runners reopen SantriHub.exe, which the upgrade deletes; the installer reopens the app instead.
+  assert.match(iss, /Flags: nowait skipifnotsilent runminimized; Check: UpgradedFromSingleExe/);
+  assert.match(iss, /function PrepareToInstall\(var NeedsRestart: Boolean\): String;\s*begin\s*HadSingleExe := FileExists\(ExpandConstant\('\{app\}\\SantriHub\.exe'\)\);/);
+  assert.match(iss, /function UpgradedFromSingleExe: Boolean;\s*begin\s*Result := HadSingleExe;/);
+  const yml = read('.github/workflows/release-santrihub.yml');
+  assert.match(yml, /A fresh silent install must not start SantriHub/);
+  assert.match(yml, /SantriHub did not reopen after an upgrade from 0\.2\.x/);
+});
+
 test('release workflow: tag must match version, assets keep a stable download name', () => {
   const yml = read('.github/workflows/release-santrihub.yml');
   assert.match(yml, /tags: \['v\*'\]/);
@@ -200,7 +211,7 @@ test('release workflow: optional code signing before install test and checksums,
   const at = (re) => { const i = yml.search(re); assert.ok(i >= 0, String(re)); return i; };
   assert.match(yml, /id-token: write/);
   assert.equal((yml.match(/if: vars\.AZURE_SIGNING_ACCOUNT != ''/g) || []).length, 3, 'signing is skipped without configuration');
-  assert.doesNotMatch(yml, /SantriHub\.exe/, 'no single executable is built or released any more');
+  assert.doesNotMatch(yml, /dist[\\/]+SantriHub\.exe/, 'no single executable is built or released any more');
   assert.ok(at(/name: Runtime is the signed, unmodified node\.exe/) < at(/name: Build installer/));
   assert.match(yml, /-notmatch 'OpenJS Foundation'/);
   assert.ok(at(/name: Build installer/) < at(/name: Sign SantriHub-Setup\.exe/));

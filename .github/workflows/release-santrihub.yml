@@ -121,6 +121,20 @@ jobs:
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $got = (& "$dir\runtime\node.exe" "$dir\app\bin\cli.js" --version).Trim()
           if ($got -ne $version) { throw "Installed app reports '$got'" }
+          $apps = { @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.ExecutablePath -eq "$dir\runtime\node.exe" -and $_.CommandLine -match ' app$' }) }
+          Start-Sleep -Seconds 5
+          if ((& $apps).Count) { throw 'A fresh silent install must not start SantriHub' }
+          # In-app update from 0.2.x (SantriHub.exe present): the installer reopens SantriHub itself.
+          Set-Content "$dir\SantriHub.exe" 'old single executable'
+          $p = Start-Process dist\SantriHub-Setup.exe -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Upgrade install failed ($($p.ExitCode))" }
+          if (Test-Path "$dir\SantriHub.exe") { throw 'Upgrade left SantriHub.exe behind' }
+          $deadline = (Get-Date).AddSeconds(30)
+          while (-not (& $apps).Count -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (-not (& $apps).Count) { throw 'SantriHub did not reopen after an upgrade from 0.2.x' }
+          & $apps | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -match 'SantriHub' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          Start-Sleep -Seconds 2
           $p = Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
           Start-Sleep -Seconds 3
           if (Test-Path "$dir\runtime\node.exe") { throw 'Uninstall left node.exe behind' }
