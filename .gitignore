@@ -10,3 +10,6 @@ dist/
 Installer_ZettBOT/
 Installer_ZettBOT.zip
 __pycache__/
+
+# Claude Code personal settings
+.claude/settings.local.json
