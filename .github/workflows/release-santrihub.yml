@@ -126,7 +126,10 @@ jobs:
           if ((& $apps).Count) { throw 'A fresh silent install must not start SantriHub' }
           # In-app update from 0.2.x (SantriHub.exe present): the installer reopens SantriHub itself.
           Set-Content "$dir\SantriHub.exe" 'old single executable'
-          $p = Start-Process dist\SantriHub-Setup.exe -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS' -Wait -PassThru
+          # Not -Wait: it also waits for the installer's child processes, i.e. the SantriHub it reopens.
+          $p = Start-Process dist\SantriHub-Setup.exe -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS' -PassThru
+          $null = $p.Handle # keeps ExitCode readable after the process exits
+          if (-not $p.WaitForExit(300000)) { throw 'Upgrade installer did not finish in 5 minutes' }
           if ($p.ExitCode -ne 0) { throw "Upgrade install failed ($($p.ExitCode))" }
           if (Test-Path "$dir\SantriHub.exe") { throw 'Upgrade left SantriHub.exe behind' }
           $deadline = (Get-Date).AddSeconds(30)
