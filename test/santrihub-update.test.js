@@ -81,24 +81,24 @@ test('installer download requires the SHA-256 from the same release', async () =
   }
 });
 
-test('runner closes the app window, installs silently and reopens SantriHub', () => {
-  const script = update.runnerScript({ installer: "C:\\Users\\O'Neil\\up.exe", exe: 'C:\\Apps\\SantriHub.exe', pid: 4321, profile: 'C:\\Data\\EdgeProfile', log: 'C:\\Data\\santrihub.log' });
-  assert.match(script, /Wait-Process -Id 4321/);
-  assert.match(script, /'C:\\Users\\O''Neil\\up\.exe'/, 'single quotes escaped for PowerShell');
-  assert.match(script, /'\/SILENT','\/SUPPRESSMSGBOXES','\/NORESTART','\/CLOSEAPPLICATIONS'/);
-  assert.match(script, /Contains\('C:\\Data\\EdgeProfile'\)/);
-  assert.match(script, /Start-Process -FilePath 'C:\\Apps\\SantriHub\.exe' -ArgumentList 'app' -WindowStyle Hidden/);
-  assert.match(script, /Name='msedge\.exe'/);
-  // Installed app: node.exe + cli.js; a path with spaces keeps its own quotes.
-  const node = update.runnerScript({ installer: 'C:\\u.exe', exe: 'C:\\P\\SantriHub\\runtime\\node.exe', args: ["C:\\Users\\O'Neil Ali\\SantriHub\\app\\bin\\cli.js", 'app'], pid: 1, profile: 'C:\\D\\EdgeProfile', log: 'C:\\l.log' });
-  assert.match(node, /Start-Process -FilePath 'C:\\P\\SantriHub\\runtime\\node\.exe' -ArgumentList '"C:\\Users\\O''Neil Ali\\SantriHub\\app\\bin\\cli\.js"','app' -WindowStyle Hidden/);
-
-  const base = { installer: 'C:\\u.exe', exe: 'C:\\SantriHub.exe', pid: 1, log: 'C:\\l.log' };
-  assert.match(update.runnerScript({ ...base, profile: 'C:\\D\\ChromeProfile', browserProcess: 'chrome.exe' }), /Name='chrome\.exe'.*ChromeProfile/);
-  assert.match(update.runnerScript({ ...base, profile: 'C:\\D\\P', browserProcess: "x'; evil" }), /Name='msedge\.exe'/, 'odd process names are not interpolated');
-  const tab = update.runnerScript({ ...base, profile: null, browserProcess: undefined });
-  assert.doesNotMatch(tab, /Stop-Process/, 'default-browser tab: nothing to close');
-  assert.match(tab, /\/SILENT/);
+test('runner closes the app window, installs silently and reopens SantriHub', async () => {
+  // Real-process coverage is in test/update-runner.test.js; here the steps and their order.
+  const { run, INSTALLER_ARGS } = require('../src/update-runner');
+  assert.deepEqual(INSTALLER_ARGS, ['/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS']);
+  const steps = [];
+  const child = () => { const handlers = {}; setImmediate(() => handlers.exit && handlers.exit(0)); return { once: (ev, fn) => { handlers[ev] = fn; }, unref() {} }; };
+  const spawnImpl = (cmd, args, opts) => { steps.push(['spawn', cmd, args, opts.detached]); return child(); };
+  const spawnSyncImpl = (cmd, args) => { steps.push(['close-window', cmd, Buffer.from(args.at(-1), 'base64').toString('utf16le')]); return {}; };
+  const opts = { installer: path.join(os.tmpdir(), 'none-setup.exe'), exe: 'C:\\P\\runtime\\node.exe', args: ["C:\\O'Neil Ali\\app\\bin\\cli.js", 'app'], pid: undefined, profile: 'C:\\Data\\EdgeProfile', browserProcess: 'chrome.exe', log: path.join(os.tmpdir(), 'santri-runner-unit.log') };
+  assert.equal(await run(opts, { spawnImpl, spawnSyncImpl }), 0);
+  assert.deepEqual(steps.map((s) => s[0]), ['close-window', 'spawn', 'spawn']);
+  assert.match(steps[0][2], /Name='chrome\.exe'.*Contains\('C:\\Data\\EdgeProfile'\)/);
+  assert.deepEqual(steps[1].slice(1), [opts.installer, INSTALLER_ARGS, true], 'installer started detached with silent flags');
+  assert.deepEqual(steps[2].slice(1), [opts.exe, opts.args, true], 'app reopened detached, paths passed as-is');
+  steps.length = 0;
+  await run({ ...opts, profile: null }, { spawnImpl, spawnSyncImpl });
+  assert.ok(!steps.some((s) => s[0] === 'close-window'), 'default-browser tab: nothing to close');
+  fs.rmSync(opts.log, { force: true });
 });
 
 test('release links are limited to this repository', () => {

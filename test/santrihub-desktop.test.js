@@ -72,7 +72,7 @@ test('installed app relaunches without a console and cleans up the old single-ex
   assert.match(host, /detached: true, windowsHide: true, stdio: 'ignore', env: \{ \.\.\.env, SANTRIHUB_DETACHED: '1' \}/);
   assert.equal(desktop.relaunchWithoutConsole({ SANTRIHUB_DETACHED: '1' }), false, 'the relaunched copy runs the app itself');
   assert.match(host, /const update = installed \? async/, 'self-update only for the installed app');
-  assert.match(host, /runnerScript\(\{ installer, exe: process\.execPath, args: \[CLI, 'app'\]/);
+  assert.match(host, /startUpdateRunner\(\{ installer, exe: process\.execPath, args: \[CLI, 'app'\]/);
 
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'santrihub-data-'));
   try {
@@ -201,7 +201,9 @@ test('release workflow: tag must match version, assets keep a stable download na
   const yml = read('.github/workflows/release-santrihub.yml');
   assert.match(yml, /tags: \['v\*'\]/);
   assert.match(yml, /Tag .* != package\.json/);
-  assert.match(yml, /gh release create \$tag dist\/SantriHub-Setup\.exe/);
+  assert.match(yml, /\$files = 'dist\/SantriHub-Setup\.exe'/);
+  assert.match(yml, /gh release create \$tag @files/);
+  assert.match(yml, /gh release upload \$tag @files --clobber/, 'a moved tag replaces the files of its release');
   assert.match(yml, /releases\/latest\/download\/SantriHub-Setup\.exe/);
   assert.match(read('.gitignore'), /^dist\/$/m);
 });
@@ -217,7 +219,7 @@ test('release workflow: optional code signing before install test and checksums,
   assert.ok(at(/name: Build installer/) < at(/name: Sign SantriHub-Setup\.exe/));
   assert.ok(at(/name: Verify signatures/) < at(/name: Installer smoke test/));
   assert.ok(at(/name: Sign SantriHub-Setup\.exe/) < at(/name: Checksums/), 'SHA256SUMS describe the signed files');
-  assert.match(yml, /gh release create \$tag .*dist\/SantriHub-Diagnosa\.zip/);
+  assert.match(yml, /\$files = .*'dist\/SantriHub-Diagnosa\.zip'/);
   for (const f of ['support/diagnosa-santrihub.cmd', 'support/diagnosa-santrihub.ps1']) assert.ok(fs.existsSync(path.join(ROOT, f)), f);
   assert.match(read('support/diagnosa-santrihub.cmd'), /-ExecutionPolicy Bypass -File "%~dp0diagnosa-santrihub\.ps1"/);
   // Windows PowerShell 5.1 reads BOM-less files as ANSI: keep the script ASCII.

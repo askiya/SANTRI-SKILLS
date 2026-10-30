@@ -7,7 +7,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { isExtensionLink } = require('./extensions');
-const { createUpdateChecker, downloadInstaller, runnerScript, isReleaseLink } = require('./update');
+const { createUpdateChecker, downloadInstaller, startUpdateRunner, isReleaseLink } = require('./update');
 
 const EDGE_PATHS = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
@@ -67,13 +67,20 @@ function log(message) {
   try { fs.appendFileSync(path.join(dataDir(), 'santrihub.log'), `${new Date().toISOString()} ${message}\n`); } catch { /* best effort */ }
 }
 
+// powershell.exe started detached (no console) exits without running its script, and a
+// non-detached child dies with the app. So a detached node.exe runs PowerShell for us
+// and waits for it: the script runs, and it outlives the app (e.g. an error message box).
+const POWERSHELL_TRAMPOLINE = "require('child_process').spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',process.argv[1]],{windowsHide:true,stdio:'ignore'})";
+function runPowerShellDetached(script, spawnImpl = spawn) {
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  spawnImpl(process.execPath, ['-e', POWERSHELL_TRAMPOLINE, encoded], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+}
+
 /** Visible error even when SantriHub runs without a console window. */
 function alertUser(message) {
   log(message);
   const text = message.replace(/'/g, "''");
-  spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command',
-    `Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('${text}', 'SantriHub') | Out-Null`],
-  { stdio: 'ignore', windowsHide: true, detached: true }).unref();
+  runPowerShellDetached(`Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('${text}', 'SantriHub') | Out-Null`);
 }
 
 /** PowerShell loop printing "closed" once windows of this profile appeared and all closed ("nowindow" if none ever showed). */
@@ -281,7 +288,7 @@ function focusWindow(profile, processName = 'msedge.exe') {
     `$p = Get-CimInstance Win32_Process -Filter "Name='${processName}'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${needle}') } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue } | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1`,
     'if ($p) { (New-Object -ComObject WScript.Shell).AppActivate($p.Id) | Out-Null }',
   ].join('\n');
-  spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { stdio: 'ignore', windowsHide: true, detached: true }).unref();
+  runPowerShellDetached(script);
 }
 
 function openWindow(edge, url, profile) {
@@ -394,9 +401,7 @@ function startDesktop({ version = '' } = {}) {
     updating = true;
     try {
       const installer = await downloadInstaller(`v${info.latest}`, path.join(data, 'updates'));
-      const script = runnerScript({ installer, exe: process.execPath, args: [CLI, 'app'], pid: process.pid, profile, browserProcess: browser?.process, log: path.join(data, 'santrihub.log') });
-      spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        { stdio: 'ignore', windowsHide: true, detached: true }).unref();
+      startUpdateRunner({ installer, exe: process.execPath, args: [CLI, 'app'], pid: process.pid, profile, browserProcess: browser?.process, log: path.join(data, 'santrihub.log') });
       log(`update ${version} -> ${info.latest}`);
       setTimeout(close, 1500).unref?.(); // let the dashboard show the confirmation first
       return { version: info.latest };
@@ -440,6 +445,6 @@ function startDesktop({ version = '' } = {}) {
   return server;
 }
 
-module.exports = { startDesktop, isInstalled, relaunchWithoutConsole, removeOldExtractions, startupMessage, alertStartupFailure, liveLock, isAlive, findEdge, findBrowser, dataDir, windowWatcherScript, attachBrowserLogin, isAllowedLoginUrl, IDLE_SHUTDOWN_MS };
+module.exports = { startDesktop, runPowerShellDetached, POWERSHELL_TRAMPOLINE, isInstalled, relaunchWithoutConsole, removeOldExtractions, startupMessage, alertStartupFailure, liveLock, isAlive, findEdge, findBrowser, dataDir, windowWatcherScript, attachBrowserLogin, isAllowedLoginUrl, IDLE_SHUTDOWN_MS };
 
 if (require.main === module) startDesktop();

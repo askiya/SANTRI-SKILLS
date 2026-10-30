@@ -92,27 +92,15 @@ async function downloadInstaller(tag, dir, { fetchImpl = globalThis.fetch } = {}
   return file;
 }
 
-const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`;
-
 /**
- * PowerShell for the detached runner: wait for the app to exit, close its app window
- * (matched by the app's private browser profile), install silently, reopen SantriHub.
- * Without a profile (dashboard in a default-browser tab) no window is closed.
+ * Starts src/update-runner.js detached (it outlives the app): it waits for the app to exit,
+ * closes its window, installs silently and reopens SantriHub. Runs on this node.exe.
  */
-function runnerScript({ installer, exe, args = ['app'], pid, profile, browserProcess = 'msedge.exe', log }) {
-  const browser = /^[\w-]+\.exe$/i.test(browserProcess || '') ? browserProcess : 'msedge.exe';
-  // Start-Process joins -ArgumentList with spaces: paths with spaces need their own quotes.
-  const argumentList = args.map((a) => psQuote(/\s/.test(a) ? `"${a}"` : a)).join(',');
-  return [
-    "$ErrorActionPreference = 'Continue'",
-    `$log = ${psQuote(log)}`,
-    `Wait-Process -Id ${Number(pid)} -Timeout 30 -ErrorAction SilentlyContinue`,
-    ...(profile ? [`Get-CimInstance Win32_Process -Filter "Name='${browser}'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains(${psQuote(profile)}) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`] : []),
-    `$p = Start-Process -FilePath ${psQuote(installer)} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS' -Wait -PassThru`,
-    "Add-Content -Path $log -Value (\"update installer exit \" + $p.ExitCode)",
-    `Remove-Item -LiteralPath ${psQuote(installer)} -Force -ErrorAction SilentlyContinue`,
-    `Start-Process -FilePath ${psQuote(exe)} -ArgumentList ${argumentList} -WindowStyle Hidden`,
-  ].join('\n');
+function startUpdateRunner({ installer, exe, args = ['app'], pid, profile, browserProcess, log }, spawnImpl = require('node:child_process').spawn) {
+  const opts = { installer, exe, args, pid, profile: profile || null, browserProcess, log };
+  const child = spawnImpl(process.execPath, [path.join(__dirname, 'update-runner.js'), JSON.stringify(opts)], { detached: true, windowsHide: true, stdio: 'ignore' });
+  child.unref();
+  return opts;
 }
 
 /** Release pages and assets of this repository only (opened from the app in the browser). */
@@ -123,4 +111,4 @@ function isReleaseLink(raw) {
     && (url.pathname === `/${REPO}/releases` || url.pathname.startsWith(`/${REPO}/releases/`));
 }
 
-module.exports = { REPO, RELEASES, INSTALLER, compareVersions, latestTag, createUpdateChecker, sumFor, downloadInstaller, runnerScript, isReleaseLink };
+module.exports = { REPO, RELEASES, INSTALLER, compareVersions, latestTag, createUpdateChecker, sumFor, downloadInstaller, startUpdateRunner, isReleaseLink };

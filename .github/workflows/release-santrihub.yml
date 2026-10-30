@@ -138,6 +138,21 @@ jobs:
           & $apps | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
           Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -match 'SantriHub' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
           Start-Sleep -Seconds 2
+          # In-app update of 0.3.x: the installed update runner installs the downloaded installer and reopens SantriHub.
+          $update = Join-Path $env:RUNNER_TEMP 'SantriHub-Setup-update.exe'
+          $updateLog = Join-Path $env:RUNNER_TEMP 'santrihub-update.log'
+          Copy-Item dist\SantriHub-Setup.exe $update
+          $env:SANTRIHUB_UPDATE = @{ installer = $update; exe = "$dir\runtime\node.exe"; args = @("$dir\app\bin\cli.js", 'app'); log = $updateLog } | ConvertTo-Json -Compress
+          & "$dir\runtime\node.exe" -e "require(process.argv[1]).run(JSON.parse(process.env.SANTRIHUB_UPDATE)).then(c => process.exit(c === 0 ? 0 : 1))" "$dir\app\src\update-runner.js"
+          if ($LASTEXITCODE -ne 0) { Get-Content $updateLog; throw 'In-app update: installer failed' }
+          if (-not (Select-String -Path $updateLog -Pattern 'update installer exit 0' -Quiet)) { Get-Content $updateLog; throw 'In-app update: installer exit not logged' }
+          if (Test-Path $update) { throw 'In-app update: downloaded installer not removed' }
+          $deadline = (Get-Date).AddSeconds(30)
+          while (-not (& $apps).Count -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (-not (& $apps).Count) { Get-Content $updateLog; throw 'In-app update: SantriHub did not reopen' }
+          & $apps | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -match 'SantriHub' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          Start-Sleep -Seconds 2
           $p = Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
           Start-Sleep -Seconds 3
           if (Test-Path "$dir\runtime\node.exe") { throw 'Uninstall left node.exe behind' }
@@ -185,5 +200,16 @@ jobs:
           $trust Cocokkan SHA-256 dengan ``SHA256SUMS.txt``.
 
           Tidak bisa dipasang atau dibuka? Download ``SantriHub-Diagnosa.zip``, ekstrak, klik dua kali ``diagnosa-santrihub.cmd``, lalu kirim laporannya ke admin Santriverse.
+
+          **Masih memakai SantriHub 0.2.x?** Tombol Update di versi itu tidak bisa memasang pembaruan. Download dan jalankan ``SantriHub-Setup.exe`` di atas satu kali; skill dan pengaturan tetap aman, dan pembaruan berikutnya cukup lewat tombol Update.
           "@
-          gh release create $tag dist/SantriHub-Setup.exe dist/SantriHub-Diagnosa.zip dist/SHA256SUMS.txt --title "SantriHub $tag" --notes $notes
+          $files = 'dist/SantriHub-Setup.exe', 'dist/SantriHub-Diagnosa.zip', 'dist/SHA256SUMS.txt'
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            # The tag was moved to a revised build of the same version: replace its files and notes.
+            gh release upload $tag @files --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Uploading the revised files failed' }
+            gh release edit $tag --title "SantriHub $tag" --notes $notes
+          } else {
+            gh release create $tag @files --title "SantriHub $tag" --notes $notes
+          }
