@@ -94,13 +94,25 @@ async function downloadInstaller(tag, dir, { fetchImpl = globalThis.fetch } = {}
 
 /**
  * Starts src/update-runner.js detached (it outlives the app): it waits for the app to exit,
- * closes its window, installs silently and reopens SantriHub. Runs on this node.exe.
+ * closes its window, installs silently and reopens SantriHub. The runner runs on a copy of
+ * node.exe next to the installer: the installer replaces the installed runtime\node.exe and
+ * would otherwise close (or fail to replace) the very process that runs it.
  */
 function startUpdateRunner({ installer, exe, args = ['app'], pid, profile, browserProcess, log }, spawnImpl = require('node:child_process').spawn) {
   const opts = { installer, exe, args, pid, profile: profile || null, browserProcess, log };
-  const child = spawnImpl(process.execPath, [path.join(__dirname, 'update-runner.js'), JSON.stringify(opts)], { detached: true, windowsHide: true, stdio: 'ignore' });
+  const base = path.dirname(installer);
+  for (const name of fs.existsSync(base) ? fs.readdirSync(base) : []) {
+    if (/^runner-\d+$/.test(name)) { try { fs.rmSync(path.join(base, name), { recursive: true, force: true }); } catch { /* still running */ } }
+  }
+  const dir = path.join(base, `runner-${Date.now()}`);
+  fs.mkdirSync(dir, { recursive: true });
+  const node = path.join(dir, path.basename(process.execPath));
+  const script = path.join(dir, 'update-runner.js');
+  fs.copyFileSync(process.execPath, node);
+  fs.copyFileSync(path.join(__dirname, 'update-runner.js'), script); // uses node:* modules only
+  const child = spawnImpl(node, [script, JSON.stringify(opts)], { detached: true, windowsHide: true, stdio: 'ignore' });
   child.unref();
-  return opts;
+  return { ...opts, runner: node };
 }
 
 /** Release pages and assets of this repository only (opened from the app in the browser). */

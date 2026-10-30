@@ -55,16 +55,48 @@ test('runner outlives the app: waits for it, runs the installer, logs, deletes i
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('startUpdateRunner launches the runner on this node.exe, detached', () => {
+test('startUpdateRunner runs a copy of node.exe + runner next to the installer (the installer replaces the installed one), detached', () => {
   const { startUpdateRunner } = require('../src/update');
-  const calls = [];
-  const fake = (cmd, args, options) => { calls.push({ cmd, args, options }); return { unref() {} }; };
-  const opts = startUpdateRunner({ installer: 'C:\\u.exe', exe: 'C:\\n\\node.exe', args: ['C:\\a b\\cli.js', 'app'], pid: 42, profile: 'C:\\P', browserProcess: 'msedge.exe', log: 'C:\\l.log' }, fake);
-  assert.equal(calls[0].cmd, process.execPath);
-  assert.equal(calls[0].args[0], path.join(ROOT, 'src', 'update-runner.js'));
-  assert.deepEqual(JSON.parse(calls[0].args[1]), opts);
-  assert.deepEqual(opts.args, ['C:\\a b\\cli.js', 'app'], 'paths with spaces are passed as-is (no shell)');
-  assert.equal(calls[0].options.detached, true);
+  const dir = tmp();
+  try {
+    fs.mkdirSync(path.join(dir, 'runner-1'));
+    const calls = [];
+    const fake = (cmd, args, options) => { calls.push({ cmd, args, options }); return { unref() {} }; };
+    const opts = startUpdateRunner({ installer: path.join(dir, 'SantriHub-Setup-v9.exe'), exe: 'C:\\n\\node.exe', args: ['C:\\a b\\cli.js', 'app'], pid: 42, profile: 'C:\\P', browserProcess: 'msedge.exe', log: 'C:\\l.log' }, fake);
+    const runnerDir = path.dirname(calls[0].cmd);
+    assert.notEqual(calls[0].cmd, process.execPath, 'not the installed node.exe');
+    assert.equal(path.dirname(runnerDir), dir);
+    assert.match(path.basename(runnerDir), /^runner-\d+$/);
+    assert.equal(fs.statSync(calls[0].cmd).size, fs.statSync(process.execPath).size, 'node.exe copied');
+    assert.equal(calls[0].args[0], path.join(runnerDir, 'update-runner.js'));
+    assert.equal(fs.readFileSync(calls[0].args[0], 'utf8'), fs.readFileSync(path.join(ROOT, 'src', 'update-runner.js'), 'utf8'));
+    const { runner, ...passed } = opts;
+    assert.deepEqual(JSON.parse(calls[0].args[1]), passed);
+    assert.deepEqual(opts.args, ['C:\\a b\\cli.js', 'app'], 'paths with spaces are passed as-is (no shell)');
+    assert.equal(calls[0].options.detached, true);
+    assert.ok(!fs.existsSync(path.join(dir, 'runner-1')), 'older runner copies cleaned up');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the whole update through startUpdateRunner: the copied runner installs and reopens after the app exits', async () => {
+  const dir = tmp();
+  try {
+    // The "installer" is a program that records it ran; real silent flags are passed and ignored.
+    const installer = path.join(dir, 'SantriHub-Setup-v9.exe');
+    fs.copyFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe'), installer);
+    const log = path.join(dir, 'santrihub.log');
+    const reopened = path.join(dir, 'reopened.txt');
+    await runParent(`
+      const { startUpdateRunner } = require(${JSON.stringify(path.join(ROOT, 'src', 'update.js'))});
+      startUpdateRunner({ installer: ${JSON.stringify(installer)}, exe: process.execPath, args: ['-e', "require('fs').writeFileSync(" + ${JSON.stringify(JSON.stringify(reopened))} + ", 'yes')"], pid: process.pid, log: ${JSON.stringify(log)} });
+      setTimeout(() => process.exit(0), 300);`);
+    assert.ok(await waitFor(() => fs.existsSync(reopened)), `not reopened; log: ${fs.existsSync(log) && fs.readFileSync(log, 'utf8')}`);
+    assert.match(fs.readFileSync(log, 'utf8'), /update installer exit \d+[\s\S]*SantriHub reopened/);
+    assert.ok(await waitFor(() => !fs.existsSync(installer), 5000), 'downloaded installer removed');
+  } finally {
+    await new Promise((r) => setTimeout(r, 500)); // let the copied runner exit before removing its folder
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('PowerShell started for the app really runs, also after the app exited (Windows)', { skip: process.platform !== 'win32' }, async () => {

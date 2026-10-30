@@ -142,10 +142,14 @@ jobs:
           $update = Join-Path $env:RUNNER_TEMP 'SantriHub-Setup-update.exe'
           $updateLog = Join-Path $env:RUNNER_TEMP 'santrihub-update.log'
           Copy-Item dist\SantriHub-Setup.exe $update
+          # Exactly as the app does it: start the runner (copied next to the installer) and exit.
           $env:SANTRIHUB_UPDATE = @{ installer = $update; exe = "$dir\runtime\node.exe"; args = @("$dir\app\bin\cli.js", 'app'); log = $updateLog } | ConvertTo-Json -Compress
-          & "$dir\runtime\node.exe" -e "require(process.argv[1]).run(JSON.parse(process.env.SANTRIHUB_UPDATE)).then(c => process.exit(c === 0 ? 0 : 1))" "$dir\app\src\update-runner.js"
-          if ($LASTEXITCODE -ne 0) { Get-Content $updateLog; throw 'In-app update: installer failed' }
-          if (-not (Select-String -Path $updateLog -Pattern 'update installer exit 0' -Quiet)) { Get-Content $updateLog; throw 'In-app update: installer exit not logged' }
+          & "$dir\runtime\node.exe" -e "require(process.argv[1]).startUpdateRunner(JSON.parse(process.env.SANTRIHUB_UPDATE))" "$dir\app\src\update.js"
+          if ($LASTEXITCODE -ne 0) { throw 'In-app update: runner did not start' }
+          $deadline = (Get-Date).AddMinutes(3)
+          while (-not ((Test-Path $updateLog) -and (Select-String -Path $updateLog -Pattern 'SantriHub reopened|reopen failed' -Quiet)) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (Test-Path $updateLog) { Get-Content $updateLog }
+          if (-not (Select-String -Path $updateLog -Pattern 'update installer exit 0' -Quiet)) { throw 'In-app update: installer did not finish with exit 0' }
           if (Test-Path $update) { throw 'In-app update: downloaded installer not removed' }
           $deadline = (Get-Date).AddSeconds(30)
           while (-not (& $apps).Count -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
