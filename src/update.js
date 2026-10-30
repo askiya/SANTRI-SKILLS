@@ -95,19 +95,23 @@ async function downloadInstaller(tag, dir, { fetchImpl = globalThis.fetch } = {}
 const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`;
 
 /**
- * PowerShell for the detached runner: wait for the app to exit, close its Edge window
- * (matched by the app's private Edge profile), install silently, reopen SantriHub.
+ * PowerShell for the detached runner: wait for the app to exit, close its app window
+ * (matched by the app's private browser profile), install silently, reopen SantriHub.
+ * Without a profile (dashboard in a default-browser tab) no window is closed.
  */
-function runnerScript({ installer, exe, pid, profile, log }) {
+function runnerScript({ installer, exe, args = ['app'], pid, profile, browserProcess = 'msedge.exe', log }) {
+  const browser = /^[\w-]+\.exe$/i.test(browserProcess || '') ? browserProcess : 'msedge.exe';
+  // Start-Process joins -ArgumentList with spaces: paths with spaces need their own quotes.
+  const argumentList = args.map((a) => psQuote(/\s/.test(a) ? `"${a}"` : a)).join(',');
   return [
     "$ErrorActionPreference = 'Continue'",
     `$log = ${psQuote(log)}`,
     `Wait-Process -Id ${Number(pid)} -Timeout 30 -ErrorAction SilentlyContinue`,
-    `Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains(${psQuote(profile)}) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
+    ...(profile ? [`Get-CimInstance Win32_Process -Filter "Name='${browser}'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains(${psQuote(profile)}) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`] : []),
     `$p = Start-Process -FilePath ${psQuote(installer)} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS' -Wait -PassThru`,
     "Add-Content -Path $log -Value (\"update installer exit \" + $p.ExitCode)",
     `Remove-Item -LiteralPath ${psQuote(installer)} -Force -ErrorAction SilentlyContinue`,
-    `Start-Process -FilePath ${psQuote(exe)} -ArgumentList 'app'`,
+    `Start-Process -FilePath ${psQuote(exe)} -ArgumentList ${argumentList} -WindowStyle Hidden`,
   ].join('\n');
 }
 

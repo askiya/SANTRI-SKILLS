@@ -1,6 +1,6 @@
 {
   "name": "santriverse-skills",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "One-command installer that connects Santriverse skill repositories (Apps Script + Monorepo guidelines) to Google Antigravity as Agent Skills or an MCP server.",
   "bin": {
     "santriverse-skills": "bin/cli.js"
@@ -13,6 +13,7 @@
     "assets",
     "registry.json",
     "README.md",
+    "PANDUAN-INSTALASI.md",
     "DESIGN-PARITY.md",
     "LICENSE",
     "!**/__pycache__/**",
@@ -27,7 +28,7 @@
     "node": ">=18.17"
   },
   "scripts": {
-    "test": "node --test test/browser-wizard.test.js test/cli.test.js test/dashboard.test.js test/detect.test.js test/github-ingest.test.js test/ide-identity.test.js test/install.test.js test/registry.test.js test/repo.test.js test/sticky-layout.test.js test/wizard.test.js test/santrihub-desktop.test.js test/santrihub-extensions.test.js test/santrihub-update.test.js",
+    "test": "node --test test/browser-wizard.test.js test/cli.test.js test/dashboard.test.js test/detect.test.js test/github-ingest.test.js test/harnesses.test.js test/ide-identity.test.js test/install.test.js test/library.test.js test/mcp-server.test.js test/mcp-gateway.test.js test/profiles.test.js test/registry.test.js test/repo.test.js test/sticky-layout.test.js test/wizard.test.js test/santrihub-desktop.test.js test/santrihub-extensions.test.js test/santrihub-update.test.js",
     "build:exe": "node scripts/build-santrihub.js",
     "build:extension": "node scripts/build-extension.js",
     "store:assets": "node scripts/build-store-assets.js",

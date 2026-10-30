@@ -8,7 +8,7 @@
   <img alt="Tested dengan node --test" src="https://img.shields.io/badge/tests-node%20--test-brightgreen">
   <img alt="Node.js 18.17 atau lebih baru" src="https://img.shields.io/badge/node-%3E%3D18.17-339933?logo=nodedotjs&logoColor=white">
   <a href="LICENSE"><img alt="Lisensi MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="npm belum dipublikasikan" src="https://img.shields.io/badge/npm-belum%20dipublikasikan-CB3837?logo=npm&logoColor=white">
+  <a href="https://www.npmjs.com/package/santriverse-skills"><img alt="Versi npm" src="https://img.shields.io/npm/v/santriverse-skills?logo=npm&logoColor=white"></a>
 </p>
 
 CLI tanpa dependency runtime untuk memasang koleksi **Google Apps Script Skills** dan **Pedoman Monorepo Santriverse** ke Google Antigravity sebagai Agent Skills atau MCP server. Katalog bawaan berasal dari [`registry.json`](registry.json). Pengguna juga dapat memasang katalog lokal terverifikasi sendiri melalui `SANTRI_SKILLS_REGISTRY`; URL katalog jarak jauh sengaja belum diterima sampai tersedia signature/pinning agar daftar perintah MCP tidak menjadi celah supply-chain.
@@ -118,41 +118,52 @@ Kontrak backend:
 - `DELETE /skills/session` mencabut sesi saat logout.
 - `GET /skills/catalog` mengembalikan `{success, sources, mcpServers}` yang lolos validator registry ketat.
 
-## SantriHub untuk Windows
+## SantriHub untuk Windows, macOS dan Linux
 
-Aplikasi desktop untuk member: tanpa Node.js, tanpa Git, tanpa terminal.
+Panduan langkah demi langkah untuk member: **[PANDUAN-INSTALASI.md](PANDUAN-INSTALASI.md)**.
 
-**Download:** [SantriHub-Setup.exe (versi terbaru)](https://github.com/askiya/SANTRI-SKILLS/releases/latest/download/SantriHub-Setup.exe) · [semua rilis](https://github.com/askiya/SANTRI-SKILLS/releases)
+| Sistem | Cara |
+|---|---|
+| Windows 10/11 (x64, ARM64) | [SantriHub-Setup.exe (versi terbaru)](https://github.com/askiya/SANTRI-SKILLS/releases/latest/download/SantriHub-Setup.exe): jendela aplikasi, tanpa Node.js/Git/terminal |
+| Windows yang memblokir installer, macOS, Linux | Node.js LTS + `npx santriverse-skills@latest app` |
 
-- Windows 10/11 x64. Dipasang per-user di `%LOCALAPPDATA%\Programs\SantriHub` (tanpa hak administrator), shortcut Start Menu + opsional Desktop, uninstall dari Settings → Apps.
-- Jendelanya adalah dashboard yang sama di dalam Microsoft Edge mode aplikasi (bawaan Windows). Menutup jendela menghentikan server lokal; membuka SantriHub dua kali memakai instance yang sama.
+- **Windows:** dipasang per-user di `%LOCALAPPDATA%\Programs\SantriHub` (tanpa hak administrator), shortcut Start Menu + opsional Desktop, uninstall dari Settings → Apps.
+- Jendelanya adalah dashboard yang sama di dalam Microsoft Edge mode aplikasi (bawaan Windows). Tanpa Edge, SantriHub memakai Google Chrome atau Brave; tanpa ketiganya, dashboard dibuka sebagai tab di browser default dan berhenti sendiri setelah 15 menit tidak dipakai. Menutup jendela menghentikan server lokal; membuka SantriHub dua kali memakai instance yang sama.
+- **macOS/Linux:** `app` menjalankan dashboard di `http://127.0.0.1:4173` (atau port bebas lain) dan membukanya di browser default. Terminal tetap terbuka; `Ctrl+C` menghentikannya.
+- **Halaman AI Agents:** satu tabel untuk mengaktifkan skill dan MCP katalog per AI agent di komputer ini: Google Antigravity, Claude Code, Codex, Gemini CLI, Cursor, VS Code (Copilot), dan Windsurf. Lokasi tiap agent ada di [`src/harnesses.js`](src/harnesses.js). Hanya folder skill bermarker SantriHub dan entri MCP yang dicatat di `~/.santrihub/harness-mcp.json` yang diubah atau dihapus; config lain dipertahankan dan dibackup. Agent yang membaca folder skill agent lain (misalnya Cursor dan VS Code membaca `~/.claude/skills`) ditandai "lewat folder lain".
+- **Halaman Skill Saya:** library skill pribadi di `~/.santrihub/library` ([`src/library.js`](src/library.js)). Impor dari repository GitHub publik mana pun: setiap folder berisi `SKILL.md` ikut beserta file teksnya (script hanya jika dicentang, file > 512 KB dilewati). Repository tanpa `SKILL.md` dibuatkan satu dari `AGENTS.md`/`CLAUDE.md`/`README.md`, dan frontmatter yang kurang (`name`, `description`) diperbaiki otomatis. Skill juga bisa ditulis atau diunggah dari Markdown. **Cek update** mengambil ulang dari GitHub dan memperbarui salinan yang aktif di AI agent. Skill library diaktifkan per agent di halaman AI Agents seperti skill katalog.
+- **SantriHub MCP Gateway** ([`src/mcp-gateway.js`](src/mcp-gateway.js), `santriverse-skills mcp-gateway`): satu entri MCP `santrihub` di setiap agent. Di belakangnya ada MCP katalog yang dicentang di panel Gateway (`~/.santrihub/gateway.json`). Tool dari server `x` ditawarkan sebagai `x__<tool>` (maks 64 karakter) dan panggilannya diteruskan ke server asalnya. Server yang gagal start dilewati tanpa mengganggu yang lain. Yang diteruskan hanya tools; resources dan prompts tidak.
+- **Profil** ([`src/profiles.js`](src/profiles.js)): simpan skill + MCP SantriHub yang aktif di satu agent sebagai profil bernama, lalu terapkan ke agent lain sekali klik (hanya menambahkan). Profil bisa diekspor/impor sebagai JSON (`santrihub-profil.json`) untuk pindah perangkat. Isinya hanya id, tanpa command atau rahasia.
 - **Login tetap wajib Member Premium Santriverse.** Verifikasi berjalan ke API Santriverse pada setiap aksi, persis seperti `dashboard`.
-- Installer belum ditandatangani sertifikat, jadi Windows SmartScreen dapat menampilkan peringatan: pilih **More info → Run anyway**. Cocokkan hash dengan `SHA256SUMS.txt` di halaman rilis.
-
-Dari terminal (Node.js 18.17+), jendela yang sama:
-
-```bash
-npx github:askiya/SANTRI-SKILLS app
-```
+- Installer belum ditandatangani sertifikat, jadi SmartScreen dapat menampilkan peringatan (**More info → Run anyway**) dan Smart App Control di Windows 11 dapat memblokir installer-nya. Aplikasi yang terpasang sendiri tidak berisi program tanpa tanda tangan (lihat di bawah). Workflow rilis menandatangani installer otomatis begitu variabel `AZURE_SIGNING_*` diisi (lihat komentar di `.github/workflows/release-santrihub.yml`). Cocokkan hash dengan `SHA256SUMS.txt` di halaman rilis.
+- Tidak bisa dipasang atau dibuka? Jalankan `support/diagnosa-santrihub.cmd` (juga tersedia sebagai `SantriHub-Diagnosa.zip` di halaman rilis). Skrip ini hanya membaca info sistem lalu menulis `diagnosa-santrihub.txt` ke Desktop.
 
 ### Pembaruan otomatis
 
 Saat rilis baru terbit, tombol **⬆ Update vX.Y.Z** muncul di top bar dashboard (dicek lewat redirect `releases/latest` GitHub, di-cache 1 jam).
 
-- **SantriHub.exe:** klik **Update sekarang** → installer resmi rilis itu diunduh, SHA-256-nya wajib cocok dengan `SHA256SUMS.txt` rilis yang sama, lalu dipasang senyap dan SantriHub terbuka lagi otomatis. Skill dan pengaturan tidak tersentuh.
+- **Aplikasi Windows (installer):** klik **Update sekarang** → installer resmi rilis itu diunduh, SHA-256-nya wajib cocok dengan `SHA256SUMS.txt` rilis yang sama, lalu dipasang senyap dan SantriHub terbuka lagi otomatis. Skill dan pengaturan tidak tersentuh.
 - **`npx santriverse-skills dashboard`:** dialog menampilkan perintah `npx santriverse-skills@latest dashboard` untuk disalin.
 
-### Cara kerja `SantriHub.exe`
+### Cara kerja aplikasi Windows
 
-`SantriHub.exe` adalah [Node.js Single Executable Application](https://nodejs.org/api/single-executable-applications.html). Seluruh aplikasi (`bin/`, `src/`, `registry.json`, aset) ikut di dalam exe dan diekstrak sekali ke `%LOCALAPPDATA%\SantriHubpp-<hash>`; build baru mendapat folder baru dan folder lama dibersihkan. `SantriHub.exe mcp-serve` menjalankan MCP stdio server, sehingga entri MCP yang ditulis dashboard tetap berlaku setelah update. Exe bertipe aplikasi GUI, jadi tidak membuka jendela console.
+Installer memasang dua hal:
+
+- `runtime\node.exe`: **Node.js resmi** (x64 atau ARM64 sesuai CPU) yang tidak diubah sedikit pun, jadi tanda tangan digital OpenJS Foundation tetap sah dan Smart App Control/SmartScreen mengizinkannya. Versi dan SHA-256-nya dipatok di `scripts/build-santrihub.js`.
+- `app\`: aplikasi SantriHub (JavaScript) plus penanda `santrihub-install.json`.
+
+Shortcut menjalankan `runtime\node.exe "app\bin\cli.js" app` dalam keadaan minimized; aplikasi lalu menjalankan ulang dirinya tanpa jendela console. MCP yang didaftarkan dashboard memakai `runtime\node.exe app\bin\cli.js mcp-serve`. Path ini tetap sama setelah update, sehingga entri MCP tetap berlaku.
+
+Versi ≤ 0.2.5 memakai `SantriHub.exe` (Node.js Single Executable Application). Menambal `node.exe` menghapus tanda tangan aslinya, sehingga exe itu diblokir di sebagian laptop. Saat update, installer menghapus `SantriHub.exe`, dan aplikasi memindahkan entri MCP lama `SantriHub.exe mcp-serve` ke `node.exe` yang baru.
 
 ### Membuat rilis
 
-1. Naikkan `version` di `package.json` (misalnya `0.2.0`) dan commit.
-2. Buat dan push tag yang sama persis: `git tag v0.2.0 && git push origin v0.2.0`.
-3. Workflow [`release-santrihub.yml`](.github/workflows/release-santrihub.yml) di runner Windows menjalankan tes, membangun `SantriHub.exe`, smoke test (`--version` dan MCP stdio), membuat `SantriHub-Setup.exe` dengan Inno Setup, menguji install/uninstall diam-diam, lalu menerbitkan GitHub Release berisi installer, exe portable, dan `SHA256SUMS.txt`.
+1. Naikkan `version` di `package.json` (misalnya `0.3.0`) dan commit.
+2. Buat dan push tag yang sama persis: `git tag v0.3.0 && git push origin v0.3.0`.
+3. Workflow [`release-santrihub.yml`](.github/workflows/release-santrihub.yml) di runner Windows menjalankan tes, menyiapkan `dist/SantriHub/` (aplikasi + Node.js resmi, tanda tangan OpenJS diverifikasi), smoke test (`--version` dan MCP stdio), membuat `SantriHub-Setup.exe` dengan Inno Setup, menguji install/uninstall diam-diam, lalu menerbitkan GitHub Release berisi installer, `SantriHub-Diagnosa.zip`, dan `SHA256SUMS.txt`.
+4. Publish ke npm (`npm publish`) agar `npx santriverse-skills@latest app` (macOS/Linux/Windows tanpa installer) ikut versi baru.
 
-Build lokal (Windows x64): `npm run build:exe` → `dist/SantriHub.exe`; installer: `ISCC.exe /DAppVersion=0.2.0 installer\santrihub.iss` → `dist/SantriHub-Setup.exe`.
+Build lokal: `npm run build:exe` → `dist/SantriHub/`; installer (Inno Setup 6.3+): `ISCC.exe /DAppVersion=0.3.0 installer\santrihub.iss` → `dist/SantriHub-Setup.exe`.
 
 ## Santri Code untuk VS Code dan Antigravity
 
@@ -279,6 +290,7 @@ Installer menambahkan entry `santri-skills` tanpa menghapus MCP server lain. Fil
 | `santrihub_status` | Bukti read-only proses MCP aktif dan identitas instalasinya; tanpa config/secret |
 | `list_skills` | Daftar skill dan deskripsinya |
 | `get_skill` | Baca isi lengkap satu `SKILL.md` |
+| `get_skill_file` | Daftar file pendukung skill (`references/`, `templates/`, ...) atau baca satu file teks (maks 512 KB, read-only) |
 | `search_docs` | Cari Markdown dari dua repository sumber |
 
 Katalog MCP terbatas pada sumber dalam [`registry.json`](registry.json):

@@ -10,6 +10,16 @@ on:
 
 permissions:
   contents: write
+  id-token: write # Azure login (OIDC) for code signing; no stored Azure password
+
+# Code signing (Azure Artifact Signing) runs only when the repository variable
+# AZURE_SIGNING_ACCOUNT is set. Setup once, in Settings → Secrets and variables → Actions:
+#   variables: AZURE_SIGNING_ENDPOINT (e.g. https://eus.codesigning.azure.net/),
+#              AZURE_SIGNING_ACCOUNT, AZURE_SIGNING_PROFILE
+#   secrets:   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#              (app registration with a federated credential for this repo and the
+#               "Artifact Signing Certificate Profile Signer" role)
+# Unsigned builds are blocked by Smart App Control and warned about by SmartScreen.
 
 concurrency:
   group: release-santrihub-${{ github.ref }}
@@ -38,21 +48,37 @@ jobs:
           npm test
           node --test test/extension.test.js test/extension-security.test.js test/extension-member-flow.test.js test/extension-gemini-install.test.js
 
-      - name: Build SantriHub.exe
+      - name: Stage app + official Node.js runtime
         run: node scripts/build-santrihub.js
 
-      - name: Smoke test SantriHub.exe
+      - name: Runtime is the signed, unmodified node.exe
+        shell: pwsh
+        run: |
+          foreach ($arch in 'win-x64', 'win-arm64') {
+            $s = Get-AuthenticodeSignature "dist\SantriHub\runtime\$arch\node.exe"
+            if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'OpenJS Foundation') { throw "$arch node.exe: $($s.Status) $($s.SignerCertificate.Subject)" }
+            "$arch node.exe signed by $($s.SignerCertificate.Subject)"
+          }
+
+      - name: Smoke test staged app
         shell: pwsh
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $p = Start-Process dist\SantriHub.exe -ArgumentList '--version' -NoNewWindow -Wait -PassThru -RedirectStandardOutput dist\version.txt
-          $got = (Get-Content dist\version.txt -Raw).Trim()
-          if ($p.ExitCode -ne 0 -or $got -ne $version) { throw "SantriHub.exe --version returned '$got' (exit $($p.ExitCode))" }
+          $node = 'dist\SantriHub\runtime\win-x64\node.exe'
+          $cli = 'dist\SantriHub\app\bin\cli.js'
+          $got = (& $node $cli --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $got -ne $version) { throw "cli --version returned '$got' (exit $LASTEXITCODE)" }
           $init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}'
-          Set-Content dist\mcp-in.txt $init -NoNewline
-          $p = Start-Process dist\SantriHub.exe -ArgumentList 'mcp-serve' -NoNewWindow -Wait -PassThru -RedirectStandardInput dist\mcp-in.txt -RedirectStandardOutput dist\mcp-out.txt
-          if (-not (Select-String -Path dist\mcp-out.txt -Pattern '"serverInfo"' -Quiet)) { throw 'MCP stdio smoke test failed' }
-          Remove-Item dist\version.txt, dist\mcp-in.txt, dist\mcp-out.txt
+          $out = $init | & $node $cli mcp-serve
+          if (-not ($out -match '"serverInfo"')) { throw 'MCP stdio smoke test failed' }
+
+      - name: Azure login (code signing)
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build installer (Inno Setup)
         shell: pwsh
@@ -63,20 +89,47 @@ jobs:
           & $iscc "/DAppVersion=$version" installer\santrihub.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
 
+      - name: Sign SantriHub-Setup.exe
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\dist\SantriHub-Setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify signatures
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        shell: pwsh
+        run: |
+          foreach ($f in 'dist\SantriHub-Setup.exe') {
+            $s = Get-AuthenticodeSignature $f
+            if ($s.Status -ne 'Valid') { throw "$f signature: $($s.Status) $($s.StatusMessage)" }
+            "$f signed by $($s.SignerCertificate.Subject)"
+          }
+
       - name: Installer smoke test (silent install + uninstall)
         shell: pwsh
         run: |
           $dir = Join-Path $env:LOCALAPPDATA 'Programs\SantriHub'
           $p = Start-Process dist\SantriHub-Setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
-          if ($p.ExitCode -ne 0 -or -not (Test-Path "$dir\SantriHub.exe")) { throw "Install failed ($($p.ExitCode))" }
+          if ($p.ExitCode -ne 0 -or -not (Test-Path "$dir\runtime\node.exe") -or -not (Test-Path "$dir\app\santrihub-install.json")) { throw "Install failed ($($p.ExitCode))" }
+          if ((Get-AuthenticodeSignature "$dir\runtime\node.exe").Status -ne 'Valid') { throw 'Installed node.exe is not validly signed' }
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $got = (& "$dir\runtime\node.exe" "$dir\app\bin\cli.js" --version).Trim()
+          if ($got -ne $version) { throw "Installed app reports '$got'" }
           $p = Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
           Start-Sleep -Seconds 3
-          if (Test-Path "$dir\SantriHub.exe") { throw 'Uninstall left SantriHub.exe behind' }
+          if (Test-Path "$dir\runtime\node.exe") { throw 'Uninstall left node.exe behind' }
 
       - name: Checksums
         shell: pwsh
         run: |
-          Get-FileHash dist\SantriHub-Setup.exe, dist\SantriHub.exe -Algorithm SHA256 |
+          Compress-Archive -Path support\diagnosa-santrihub.cmd, support\diagnosa-santrihub.ps1 -DestinationPath dist\SantriHub-Diagnosa.zip -Force
+          Get-FileHash dist\SantriHub-Setup.exe, dist\SantriHub-Diagnosa.zip -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
             Set-Content dist\SHA256SUMS.txt
           Get-Content dist\SHA256SUMS.txt
@@ -86,7 +139,7 @@ jobs:
           name: SantriHub-windows
           path: |
             dist/SantriHub-Setup.exe
-            dist/SantriHub.exe
+            dist/SantriHub-Diagnosa.zip
             dist/SHA256SUMS.txt
 
       - name: Publish GitHub Release
@@ -96,15 +149,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = '${{ github.ref_name }}'
+          $trust = if ((Get-AuthenticodeSignature dist\SantriHub-Setup.exe).Status -eq 'Valid') {
+            'Installer ditandatangani secara digital (code signing).'
+          } else {
+            'Installer belum ditandatangani sertifikat: Windows SmartScreen dapat menampilkan peringatan, pilih **More info → Run anyway**. Aplikasi yang terpasang berjalan di atas node.exe resmi bertanda tangan OpenJS Foundation. Jika installer diblokir Smart App Control, pakai cara Node.js di PANDUAN-INSTALASI.md.'
+          }
           $notes = @"
           ## SantriHub $tag untuk Windows
 
-          **Download:** ``SantriHub-Setup.exe`` (Windows 10/11 x64, tanpa hak administrator, tidak perlu Node.js/Git).
+          **Download:** ``SantriHub-Setup.exe`` (Windows 10/11, x64 dan ARM64, tanpa hak administrator, tidak perlu memasang Node.js/Git).
+
+          Panduan instalasi (Windows, macOS, cara Node.js): https://github.com/${{ github.repository }}/blob/main/PANDUAN-INSTALASI.md
 
           Login memakai akun **Member Premium Santriverse**; akses diverifikasi ke API Santriverse setiap kali dipakai.
 
           Link tetap versi terbaru: https://github.com/${{ github.repository }}/releases/latest/download/SantriHub-Setup.exe
 
-          Windows SmartScreen dapat menampilkan peringatan karena installer belum ditandatangani sertifikat: pilih **More info → Run anyway**. Cocokkan SHA-256 dengan ``SHA256SUMS.txt``.
+          $trust Cocokkan SHA-256 dengan ``SHA256SUMS.txt``.
+
+          Tidak bisa dipasang atau dibuka? Download ``SantriHub-Diagnosa.zip``, ekstrak, klik dua kali ``diagnosa-santrihub.cmd``, lalu kirim laporannya ke admin Santriverse.
           "@
-          gh release create $tag dist/SantriHub-Setup.exe dist/SantriHub.exe dist/SHA256SUMS.txt --title "SantriHub $tag" --notes $notes
+          gh release create $tag dist/SantriHub-Setup.exe dist/SantriHub-Diagnosa.zip dist/SHA256SUMS.txt --title "SantriHub $tag" --notes $notes

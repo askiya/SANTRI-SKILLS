@@ -1,6 +1,6 @@
 'use strict';
 // SantriHub desktop window: the localhost dashboard inside a Microsoft Edge
-// app window (no tabs, no address bar). Premium verification is unchanged —
+// app window (no tabs, no address bar), or Chrome/Brave, or a default-browser tab. Premium verification is unchanged —
 // the dashboard still logs in through santriverse.my.id and checks every call.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -13,6 +13,12 @@ const EDGE_PATHS = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
 ];
+const EDGE_EXE = path.join('Microsoft', 'Edge', 'Application', 'msedge.exe');
+// Default paths first, then the env-based ones: Windows on another drive, or a per-user Edge.
+const edgePaths = (env = process.env) => [...new Set([
+  ...EDGE_PATHS,
+  ...[env['PROGRAMFILES(X86)'], env.PROGRAMFILES, env.LOCALAPPDATA].filter(Boolean).map((dir) => path.join(dir, EDGE_EXE)),
+])];
 // msedge.exe is a launcher that exits within milliseconds, so its exit says
 // nothing about the window. SantriHub instead watches for visible windows of
 // its own Edge profile and stops when the last one closes.
@@ -37,7 +43,25 @@ function liveLock(file) {
   return null;
 }
 
-const findEdge = (exists = fs.existsSync) => EDGE_PATHS.find(p => exists(p)) || null;
+const findEdge = (exists = fs.existsSync, env = process.env) => edgePaths(env).find(p => exists(p)) || null;
+
+// Without Edge (removed by Tiny11/Atlas-style Windows builds or by policy) the same
+// --app window comes from Chrome or Brave; each gets its own private profile.
+const CHROMIUM_BROWSERS = [
+  { name: 'Google Chrome', process: 'chrome.exe', profile: 'ChromeProfile', exe: path.join('Google', 'Chrome', 'Application', 'chrome.exe') },
+  { name: 'Brave', process: 'brave.exe', profile: 'BraveProfile', exe: path.join('BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe') },
+];
+/** App-window browser: Edge first, then Chrome/Brave; null when none is installed. */
+function findBrowser(exists = fs.existsSync, env = process.env) {
+  const edge = findEdge(exists, env);
+  if (edge) return { name: 'Microsoft Edge', path: edge, process: 'msedge.exe', profile: 'EdgeProfile' };
+  const dirs = [env.PROGRAMFILES || 'C:\\Program Files', env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', env.LOCALAPPDATA].filter(Boolean);
+  for (const b of CHROMIUM_BROWSERS) {
+    const hit = dirs.map((dir) => path.join(dir, b.exe)).find((p) => exists(p));
+    if (hit) return { name: b.name, path: hit, process: b.process, profile: b.profile };
+  }
+  return null;
+}
 
 function log(message) {
   try { fs.appendFileSync(path.join(dataDir(), 'santrihub.log'), `${new Date().toISOString()} ${message}\n`); } catch { /* best effort */ }
@@ -53,12 +77,12 @@ function alertUser(message) {
 }
 
 /** PowerShell loop printing "closed" once windows of this profile appeared and all closed ("nowindow" if none ever showed). */
-function windowWatcherScript(profile) {
+function windowWatcherScript(profile, processName = 'msedge.exe') {
   const needle = profile.replace(/'/g, "''");
   return [
     '$seen = $false; $start = Get-Date',
     'while ($true) {',
-    `  $ids = @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${needle}') } | ForEach-Object { $_.ProcessId })`,
+    `  $ids = @(Get-CimInstance Win32_Process -Filter "Name='${processName}'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${needle}') } | ForEach-Object { $_.ProcessId })`,
     '  $windows = @($ids | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue } | Where-Object { $_.MainWindowHandle -ne 0 }).Count',
     '  if ($windows -gt 0) { $seen = $true }',
     "  elseif ($seen) { 'closed'; break }",
@@ -68,8 +92,8 @@ function windowWatcherScript(profile) {
   ].join('\n');
 }
 
-function watchWindows(profile, onEvent) {
-  const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', windowWatcherScript(profile)],
+function watchWindows(profile, processName, onEvent) {
+  const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', windowWatcherScript(profile, processName)],
     { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
   let out = '';
   ps.stdout.on('data', (chunk) => {
@@ -191,7 +215,7 @@ function attachBrowserLogin(server, { focus = () => {}, open = openExternal, upd
     if (req.method === 'POST' && pathname === '/__santrihub/update') {
       if (!sameOriginJson()) return json(403, { error: 'Ditolak.' });
       req.resume();
-      if (!update) return json(409, { error: 'Pembaruan otomatis hanya tersedia di aplikasi SantriHub (SantriHub.exe).' });
+      if (!update) return json(409, { error: 'Pembaruan otomatis hanya tersedia di aplikasi SantriHub yang dipasang dengan SantriHub-Setup.exe.' });
       Promise.resolve().then(update).then(
         (result) => json(200, { ok: true, ...result }),
         (error) => json(error?.status || 502, { error: error?.message || 'Pembaruan gagal.' }),
@@ -251,10 +275,10 @@ function openExternal(url) {
 }
 
 /** Bring the SantriHub window to the front after a browser login. */
-function focusWindow(profile) {
+function focusWindow(profile, processName = 'msedge.exe') {
   const needle = profile.replace(/'/g, "''");
   const script = [
-    `$p = Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${needle}') } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue } | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1`,
+    `$p = Get-CimInstance Win32_Process -Filter "Name='${processName}'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${needle}') } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue } | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1`,
     'if ($p) { (New-Object -ComObject WScript.Shell).AppActivate($p.Id) | Out-Null }',
   ].join('\n');
   spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { stdio: 'ignore', windowsHide: true, detached: true }).unref();
@@ -264,23 +288,74 @@ function openWindow(edge, url, profile) {
   return spawn(edge, [`--app=${url}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check'], { stdio: 'ignore', windowsHide: false });
 }
 
+// ── Installed app (SantriHub-Setup.exe) ─────────────────────────────────────
+// The installer ships the official, unmodified node.exe (signature of the OpenJS
+// Foundation intact, so Smart App Control lets it run) next to this app folder,
+// and marks the folder with santrihub-install.json. `node bin/cli.js app` from a
+// checkout or npx has no marker: no self-update, no relaunch.
+const APP_ROOT = path.resolve(__dirname, '..');
+const CLI = path.join(APP_ROOT, 'bin', 'cli.js');
+const isInstalled = (root = APP_ROOT) => fs.existsSync(path.join(root, 'santrihub-install.json'));
+
+/**
+ * node.exe is a console program, so the Start Menu shortcut (minimized) starts it with a
+ * console. Run the app in a detached copy without one, and let the console exit at once.
+ */
+function relaunchWithoutConsole(env = process.env) {
+  if (env.SANTRIHUB_DETACHED === '1') return false;
+  spawn(process.execPath, [CLI, 'app'], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...env, SANTRIHUB_DETACHED: '1' } }).unref();
+  return true;
+}
+
+/** Folders extracted by SantriHub.exe ≤ 0.2.5 (single-executable builds), unused since. */
+function removeOldExtractions(data) {
+  for (const name of fs.readdirSync(data)) {
+    if (/^app-[0-9a-f]+(\.tmp-\d+)?$/.test(name)) {
+      try { fs.rmSync(path.join(data, name), { recursive: true, force: true }); } catch { /* in use */ }
+    }
+  }
+}
+
+/** What a member sees when SantriHub cannot start; the full error stays in the log. */
+function startupMessage(error, dir = dataDir()) {
+  const code = error && error.code;
+  const hint = code === 'EPERM' || code === 'EACCES'
+    ? 'Akses ke folder data ditolak. Biasanya karena antivirus atau kebijakan kantor/sekolah. Izinkan SantriHub di antivirus lalu buka lagi.'
+    : code === 'ENOSPC' ? 'Ruang disk penuh. Kosongkan beberapa ratus MB lalu buka lagi.'
+      : 'Buka SantriHub sekali lagi. Jika tetap gagal, kirim file log ke admin Santriverse.';
+  return `SantriHub gagal dibuka (${code || (error && error.message) || 'error'}).\n\n${hint}\n\nLog: ${path.join(dir, 'santrihub.log')}`;
+}
+
+function alertStartupFailure(error) {
+  log(`startup: ${error?.stack || error}`);
+  alertUser(startupMessage(error));
+}
+
 function startDesktop({ version = '' } = {}) {
+  const installed = isInstalled();
+  if (installed && relaunchWithoutConsole()) return null;
   const data = dataDir();
   const lockFile = path.join(data, 'desktop.lock');
-  const profile = path.join(data, 'EdgeProfile');
   fs.mkdirSync(data, { recursive: true });
-
-  const edge = findEdge();
-  if (!edge) {
-    alertUser('Microsoft Edge tidak ditemukan. SantriHub membutuhkan Microsoft Edge (bawaan Windows 10/11).');
-    process.exitCode = 1;
-    return null;
+  if (installed) {
+    removeOldExtractions(data);
+    // MCP entries written by SantriHub.exe ≤ 0.2.5 point to an exe the installer removed.
+    try {
+      const { migrateOwnEntry, mcpConfigPath } = require('./install');
+      if (migrateOwnEntry(mcpConfigPath('global'))) log('MCP santri-skills moved to the bundled node.exe');
+    } catch (error) { log(`MCP migration skipped: ${error.message}`); }
   }
+
+  // No Edge/Chrome/Brave: the dashboard opens as a tab of the default browser instead of failing.
+  const browser = findBrowser();
+  const profile = browser ? path.join(data, browser.profile) : null;
+  const show = (url) => (browser ? openWindow(browser.path, url, profile) : openExternal(url));
+  log(`window: ${browser ? `${browser.name} ${browser.path}` : 'default browser (no Edge/Chrome/Brave found)'}`);
 
   // Second launch: bring up a window on the running instance instead of a new server.
   const running = liveLock(lockFile);
   if (running) {
-    openWindow(edge, running.url, profile).unref();
+    show(running.url)?.unref();
     return null;
   }
 
@@ -309,18 +384,17 @@ function startDesktop({ version = '' } = {}) {
   process.on('exit', () => { try { fs.rmSync(lockFile, { force: true }); } catch { /* exiting */ } });
   process.on('uncaughtException', (error) => { log(`uncaught: ${error?.stack || error}`); close(); });
 
-  // Self-update only for the installed SantriHub.exe (not `node bin/cli.js app`).
-  const packaged = /(^|[\\/])santrihub\.exe$/i.test(process.execPath);
+  // Self-update only for the installed app (not `node bin/cli.js app` or npx).
   const checkUpdate = createUpdateChecker({ current: version });
   let updating = false;
-  const update = packaged ? async () => {
+  const update = installed ? async () => {
     if (updating) throw Object.assign(new Error('Pembaruan sedang berjalan.'), { status: 409 });
     const info = await checkUpdate();
     if (!info.available) throw Object.assign(new Error('SantriHub sudah versi terbaru.'), { status: 409 });
     updating = true;
     try {
       const installer = await downloadInstaller(`v${info.latest}`, path.join(data, 'updates'));
-      const script = runnerScript({ installer, exe: process.execPath, pid: process.pid, profile, log: path.join(data, 'santrihub.log') });
+      const script = runnerScript({ installer, exe: process.execPath, args: [CLI, 'app'], pid: process.pid, profile, browserProcess: browser?.process, log: path.join(data, 'santrihub.log') });
       spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-Command', script],
         { stdio: 'ignore', windowsHide: true, detached: true }).unref();
       log(`update ${version} -> ${info.latest}`);
@@ -331,26 +405,41 @@ function startDesktop({ version = '' } = {}) {
       throw error;
     }
   } : null;
-  attachBrowserLogin(server, { focus: () => focusWindow(profile), update });
+  attachBrowserLogin(server, { focus: () => (browser ? focusWindow(profile, browser.process) : undefined), update });
+
+  let idleArmed = false;
+  const armIdleShutdown = (reason) => {
+    if (idleArmed) return;
+    idleArmed = true;
+    log(`${reason}; idle shutdown armed`);
+    setInterval(() => { if (Date.now() - lastRequest > IDLE_SHUTDOWN_MS) close(); }, 60 * 1000).unref();
+  };
 
   server.listen(0, '127.0.0.1', () => {
     const url = `http://127.0.0.1:${server.address().port}`;
+    const started = Date.now();
     fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, url, version }));
     log(`SantriHub ${version} ${url}`);
-    const child = openWindow(edge, url, profile);
-    child.once('error', (error) => { alertUser(`Gagal membuka jendela SantriHub: ${error.message}`); close(); });
+    if (!browser) {
+      openExternal(url);
+      return armIdleShutdown('default browser tab (closing it cannot be detected)');
+    }
+    const child = openWindow(browser.path, url, profile);
+    child.once('error', (error) => { alertUser(`Gagal membuka jendela SantriHub (${browser.name}): ${error.message}`); close(); });
     child.unref();
-    watcher = watchWindows(profile, (event) => {
+    watcher = watchWindows(profile, browser.process, (event) => {
       if (event === 'closed') return close();
+      // The page was loaded, so a window exists even though the watcher cannot see it
+      // (WMI unavailable or slow): keep running instead of closing a working app.
+      if (event === 'nowindow' && lastRequest > started) return armIdleShutdown('window not visible to the watcher, dashboard in use');
       if (event === 'nowindow') { alertUser('Jendela SantriHub tidak muncul. Coba buka SantriHub lagi.'); return close(); }
       // Watcher unavailable: fall back to stopping once the dashboard goes quiet.
-      log(`window watcher stopped (${event}); idle shutdown armed`);
-      setInterval(() => { if (Date.now() - lastRequest > IDLE_SHUTDOWN_MS) close(); }, 60 * 1000).unref();
+      armIdleShutdown(`window watcher stopped (${event})`);
     });
   });
   return server;
 }
 
-module.exports = { startDesktop, liveLock, isAlive, findEdge, dataDir, windowWatcherScript, attachBrowserLogin, isAllowedLoginUrl, IDLE_SHUTDOWN_MS };
+module.exports = { startDesktop, isInstalled, relaunchWithoutConsole, removeOldExtractions, startupMessage, alertStartupFailure, liveLock, isAlive, findEdge, findBrowser, dataDir, windowWatcherScript, attachBrowserLogin, isAllowedLoginUrl, IDLE_SHUTDOWN_MS };
 
 if (require.main === module) startDesktop();

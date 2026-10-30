@@ -93,8 +93,28 @@ function readJson(file) {
 // Unknown entries under the same name are never replaced: collisions are rejected.
 // santri-skills may be refreshed only when the existing entry is recognisably ours (npx package or local cli.js mcp-serve).
 const { isDeepStrictEqual } = require('node:util');
+const PACKAGED_EXE = /(^|[\\/])santrihub\.exe$/i;
 const localEntry = { command: process.execPath, args: [path.resolve(__dirname, '../bin/cli.js'), 'mcp-serve'] };
-const isOurs = (e) => isDeepStrictEqual(e, SERVER_ENTRY) || isDeepStrictEqual(e, localEntry);
+// What this runtime registers. The installed app runs on its bundled node.exe, so localEntry
+// (<app>\runtime\node.exe <app>\app\bin\cli.js mcp-serve) stays valid across updates.
+// SantriHub.exe ≤ 0.2.5 (single executable) ignored the cli.js path and wrote a path-free entry.
+const ownServerEntry = (execPath = process.execPath) => PACKAGED_EXE.test(execPath) ? { command: execPath, args: ['mcp-serve'] } : localEntry;
+// cli.js of the santriverse-skills package, or a cli.js that no longer exists (folder moved/updated away).
+function ourCli(file) {
+  if (!fs.existsSync(file)) return true;
+  try { return JSON.parse(fs.readFileSync(path.resolve(file, '../../package.json'), 'utf8')).name === 'santriverse-skills'; } catch { return false; }
+}
+// Entries written by any SantriHub build stay ours after an update or a move of the app folder:
+// SantriHub.exe [<old app-<hash>>\bin\cli.js] mcp-serve, or node <santriverse-skills>\bin\cli.js mcp-serve.
+function isOurs(e) {
+  if (isDeepStrictEqual(e, SERVER_ENTRY) || isDeepStrictEqual(e, localEntry)) return true;
+  if (!e || typeof e !== 'object' || Array.isArray(e) || typeof e.command !== 'string' || !Array.isArray(e.args)) return false;
+  if (Object.keys(e).some((k) => k !== 'command' && k !== 'args') || e.args.some((a) => typeof a !== 'string')) return false;
+  const exe = PACKAGED_EXE.test(e.command);
+  if (exe && isDeepStrictEqual(e.args, ['mcp-serve'])) return true;
+  if (e.args.length !== 2 || e.args[1] !== 'mcp-serve' || !path.isAbsolute(e.args[0]) || !/[\\/]bin[\\/]cli\.js$/i.test(e.args[0])) return false;
+  return exe || (/(^|[\\/])node(\.exe)?$/i.test(e.command) && ourCli(e.args[0]));
+}
 // Cooperative exclusive lock plus pre-rename snapshot check: never merge stale data.
 function safeMcpFile(file) {
   if(typeof file!=='string'||!path.isAbsolute(file)||file.split(/[\\/]/).includes('..')||/[\x00-\x1f]/.test(file)||/^\\\\/.test(file)||process.platform==='win32'&&file.slice(2).includes(':'))throw new Error('Path config invalid.');
@@ -155,6 +175,20 @@ function addMcpServer(file, entry = SERVER_ENTRY, name = SERVER_NAME, { preset =
     if(meta.servers?.[name]!==preset)atomicJson(marker,{...meta,servers:{...(meta.servers||{}),[name]:preset},updatedAt:new Date().toISOString()});
   }
   return config;
+}
+
+// Our santri-skills entry whose program or cli.js no longer exists (SantriHub.exe ≤ 0.2.5 was
+// replaced by the bundled node.exe, or the app folder moved) is pointed at this runtime.
+// Returns true when the config was changed. A missing config or a foreign entry is left alone.
+function migrateOwnEntry(file, entry = ownServerEntry(), exists = fs.existsSync) {
+  if (!exists(file)) return false;
+  let current;
+  try { current = JSON.parse(fs.readFileSync(file, 'utf8'))?.mcpServers?.[SERVER_NAME]; } catch { return false; }
+  if (!current || !isOurs(current) || isDeepStrictEqual(current, entry) || isDeepStrictEqual(current, SERVER_ENTRY)) return false;
+  const cli = current.args.find((a) => /[\\/]bin[\\/]cli\.js$/i.test(a));
+  if (exists(current.command) && (!cli || exists(cli))) return false;
+  addMcpServer(file, entry);
+  return true;
 }
 
 function atomicJson(file, value) {
@@ -246,4 +280,4 @@ function configStatus(scope, cwd = process.cwd(), home = os.homedir(), override 
   };
 }
 
-module.exports = { SHADCN_ENTRY, removeInstalled, mergeMcpEntries, MARKER, SERVER_NAME, SERVER_ENTRY, skillTargets, mcpConfigPath, installSkills, uninstallSkills, addMcpServer, removeMcpServer, installedSkills, configStatus };
+module.exports = { SHADCN_ENTRY, ownServerEntry, isOurs, migrateOwnEntry, mutateMcp, ownedMarker, removeInstalled, mergeMcpEntries, MARKER, SERVER_NAME, SERVER_ENTRY, skillTargets, mcpConfigPath, installSkills, uninstallSkills, addMcpServer, removeMcpServer, installedSkills, configStatus };

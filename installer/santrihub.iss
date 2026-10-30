@@ -1,7 +1,12 @@
-; SantriHub installer (Inno Setup 6).
-; Build after scripts/build-santrihub.js has produced dist\SantriHub.exe:
-;   ISCC.exe /DAppVersion=0.2.0 installer\santrihub.iss
+; SantriHub installer (Inno Setup 6.3+).
+; Build after scripts/build-santrihub.js has staged dist\SantriHub\:
+;   ISCC.exe /DAppVersion=0.3.0 installer\santrihub.iss
 ; Output: dist\SantriHub-Setup.exe (per-user install, no administrator rights).
+;
+; Installed layout ({app} = %LOCALAPPDATA%\Programs\SantriHub):
+;   runtime\node.exe   official Node.js for this CPU (x64 or ARM64), signature intact
+;   app\               SantriHub (JavaScript) + santrihub-install.json
+; The shortcuts run node.exe with app\bin\cli.js. No unsigned program is installed.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -25,13 +30,14 @@ DefaultGroupName=SantriHub
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 PrivilegesRequired=lowest
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+; x64 PCs, and ARM PCs natively (Windows 10 ARM cannot run x64 programs).
+ArchitecturesAllowed=x64compatible or arm64
+ArchitecturesInstallIn64BitMode=x64compatible or arm64
 MinVersion=10.0
 OutputDir=..\dist
 OutputBaseFilename=SantriHub-Setup
 SetupIconFile=..\assets\santrihub.ico
-UninstallDisplayIcon={app}\SantriHub.exe
+UninstallDisplayIcon={app}\santrihub.ico
 UninstallDisplayName=SantriHub
 Compression=lzma2/max
 SolidCompression=yes
@@ -46,21 +52,33 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
+[InstallDelete]
+; SantriHub.exe of versions up to 0.2.5 (unsigned single executable) and the previous
+; app files, so files removed in this version do not linger.
+Type: files; Name: "{app}\SantriHub.exe"
+Type: filesandordirs; Name: "{app}\app"
+
 [Files]
-Source: "..\dist\SantriHub.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\SantriHub\runtime\win-x64\node.exe"; DestDir: "{app}\runtime"; Check: not IsArm64; Flags: ignoreversion
+Source: "..\dist\SantriHub\runtime\win-arm64\node.exe"; DestDir: "{app}\runtime"; Check: IsArm64; Flags: ignoreversion
+Source: "..\dist\SantriHub\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\SantriHub\santrihub.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\SantriHub"; Filename: "{app}\SantriHub.exe"; Parameters: "app"; Comment: "Santriverse Skills untuk Google Antigravity"
-Name: "{autodesktop}\SantriHub"; Filename: "{app}\SantriHub.exe"; Parameters: "app"; Tasks: desktopicon; Comment: "Santriverse Skills untuk Google Antigravity"
+; Minimized: node.exe briefly owns a console before SantriHub relaunches without one.
+Name: "{autoprograms}\SantriHub"; Filename: "{app}\runtime\node.exe"; Parameters: """{app}\app\bin\cli.js"" app"; WorkingDir: "{app}"; IconFilename: "{app}\santrihub.ico"; Flags: runminimized; Comment: "SantriHub - skills dan MCP untuk AI agent"
+Name: "{autodesktop}\SantriHub"; Filename: "{app}\runtime\node.exe"; Parameters: """{app}\app\bin\cli.js"" app"; WorkingDir: "{app}"; IconFilename: "{app}\santrihub.ico"; Flags: runminimized; Tasks: desktopicon; Comment: "SantriHub - skills dan MCP untuk AI agent"
 
 [Run]
-Filename: "{app}\SantriHub.exe"; Parameters: "app"; Description: "{cm:LaunchProgram,SantriHub}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\runtime\node.exe"; Parameters: """{app}\app\bin\cli.js"" app"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,SantriHub}"; Flags: nowait postinstall skipifsilent runminimized
 
 [UninstallRun]
-; Stop a running SantriHub so its files can be removed.
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM SantriHub.exe"; Flags: runhidden; RunOnceId: "StopSantriHub"
+; Stop SantriHub and its MCP server (only node.exe of this install, never other Node.js programs).
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -WindowStyle Hidden -Command ""Get-Process node -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '*\SantriHub\runtime\node.exe' } | Stop-Process -Force"""; Flags: runhidden; RunOnceId: "StopSantriHub"
+; Up to 0.2.5
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM SantriHub.exe"; Flags: runhidden; RunOnceId: "StopSantriHubExe"
 
 [UninstallDelete]
-; Extracted app, Edge window profile, lock and log. Installed skills and the
-; Antigravity MCP config (in the user's .gemini folder) are left untouched.
+; App window profile, lock and log. Installed skills and the MCP configs of the
+; AI agents (e.g. the user's .gemini folder) are left untouched.
 Type: filesandordirs; Name: "{localappdata}\SantriHub"

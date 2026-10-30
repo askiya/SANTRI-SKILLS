@@ -28,7 +28,7 @@ async function remoteSkills(reg, sourceFetch) {
   }
   return [...skills.values()];
 }
-const { installSkills, addMcpServer, mergeMcpEntries, configStatus, removeInstalled, SHADCN_ENTRY } = require('./install');
+const { installSkills, addMcpServer, mergeMcpEntries, configStatus, removeInstalled, SHADCN_ENTRY, ownServerEntry, ownedMarker } = require('./install');
 const REACT_BITS_URL='https://reactbits.dev/get-started/mcp';
 function reactBitsSource(value){
   if(typeof value!=='string')return null;
@@ -63,6 +63,13 @@ function copyLocalSkills(skills, targets) {
 }
 function mergeLocalMcp(file,entries){const result=mergeMcpEntries(file,entries);return {servers:Object.keys(result.mcpServers||{}),backup:result.backup}}
 const { detectTargets, validateCustomTargets, resolveTargets, resolveForWrite, findAntigravityExecutable } = require('./detect');
+const { harnessDefs, findHarness, harnessStatus, setSkill, setMcp } = require('./harnesses');
+const library = require('./library');
+const gateway = require('./mcp-gateway');
+const profiles = require('./profiles');
+// The SantriHub MCP Gateway as an MCP entry: this runtime with `mcp-gateway` instead of `mcp-serve`.
+const GATEWAY_ID = 'santrihub-gateway', GATEWAY_NAME = 'santrihub';
+const gatewayEntry = () => { const e = ownServerEntry(); return { command: e.command, args: e.args.map((a) => (a === 'mcp-serve' ? 'mcp-gateway' : a)) }; };
 const { EXTENSIONS } = require('./extensions');
 const { createUpdateChecker } = require('./update');
 const APP_VERSION = require('../package.json').version;
@@ -110,6 +117,24 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
   const evidence=()=>{if(verification&&(verification.expires<=Date.now()||verification.binding!==binding()))clearVerification();return {verified:Boolean(verification&&verification.evidence),pending:Boolean(verification&&!verification.evidence),expiresAt:verification?verification.expires:null,evidence:verification?verification.evidence:null,note:'Bukti hanya bridge santri-skills. MCP lain belum diketahui; file Skills bukan bukti dimuat IDE. Identitas IDE tidak diautentikasi.'};};
   const csrfTokens = new Map();
   let busy = false;
+  const libRoot = library.libraryRoot(home || os.homedir());
+  const libraryPreviews = new Map(); // in-memory GitHub scans awaiting the member's review (10 min)
+  const gatewayPath = gateway.gatewayFile(home || os.homedir(), env);
+  const profilesPath = profiles.profilesFile(home || os.homedir());
+  const harnessStateFile = path.join(home || os.homedir(), '.santrihub', 'harness-mcp.json');
+  // A skill to activate: catalog first, then the member's library.
+  async function resolveSkill(id) {
+    const skill = (await remoteSkills(mergedCatalog(await session.catalog()), sourceFetch)).find((s) => s.id === id) || library.listLibrary(libRoot).find((s) => s.id === id);
+    if (!skill) throw new Error(`Skill ${id} tidak ada di katalog maupun library Anda.`);
+    return skill;
+  }
+  // An MCP to register: { name in the agent config, base entry }.
+  async function resolveMcp(id) {
+    if (id === GATEWAY_ID) return { name: GATEWAY_NAME, base: gatewayEntry() };
+    const entry = mcpCatalog(mergedCatalog(await session.catalog())).find((m) => m.id === id);
+    if (!entry) throw new Error(`MCP ${id} tidak terdaftar di katalog.`);
+    return entry.builtin ? { name: 'santri-skills', base: ownServerEntry() } : { name: entry.id, base: { command: entry.command, args: entry.args } };
+  }
   // In-memory only. Preview tokens bind exact source + state + selected kind; expire after 10 min.
   const localPreviews = new Map();
   const githubPreviews = new Map();
@@ -261,6 +286,26 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         });
       }
 
+      // AI agents (harnesses) on this machine: where skills/MCP live and what is active. Names only.
+      if (req.method === 'GET' && req.url === '/api/harnesses') {
+        await session.requirePremium();
+        return send(200, { harnesses: harnessStatus({ home: home || os.homedir(), env }) });
+      }
+      // The member's own skills (GitHub imports and Markdown), see src/library.js.
+      if (req.method === 'GET' && req.url === '/api/library') {
+        await session.requirePremium();
+        return send(200, { skills: library.listLibrary(libRoot).map(({ dir, ...s }) => s) });
+      }
+      // Which catalog MCP servers run behind the SantriHub MCP Gateway.
+      if (req.method === 'GET' && req.url === '/api/gateway') {
+        await session.requirePremium();
+        return send(200, { servers: Object.keys(gateway.readGateway(gatewayPath)) });
+      }
+      if (req.method === 'GET' && req.url === '/api/profiles') {
+        await session.requirePremium();
+        return send(200, { version: 1, profiles: profiles.readProfiles(profilesPath) });
+      }
+
       if (req.method !== 'POST') return send(404, { error: 'Tidak ditemukan' });
       await session.requirePremium();
       const input = await readBody();
@@ -279,7 +324,10 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
       // CSRF on write operations
       if (['/api/install', '/api/mcp', '/api/repo/install', '/api/repo/preview', '/api/targets/custom',
            '/api/local/skills/preview', '/api/local/skills/install',
-           '/api/local/mcp/preview', '/api/local/mcp/install', '/api/github/preview', '/api/github/install', '/api/repos', '/api/repos/delete', '/api/website/preview', '/api/website/install', '/api/verify', '/api/antigravity/control'].includes(req.url)) {
+           '/api/local/mcp/preview', '/api/local/mcp/install', '/api/github/preview', '/api/github/install', '/api/repos', '/api/repos/delete', '/api/website/preview', '/api/website/install', '/api/verify', '/api/antigravity/control',
+           '/api/harnesses/skill', '/api/harnesses/mcp',
+           '/api/library/github/preview', '/api/library/github/save', '/api/library/markdown', '/api/library/delete', '/api/library/update',
+           '/api/gateway', '/api/profiles/save', '/api/profiles/apply', '/api/profiles/delete', '/api/profiles/import'].includes(req.url)) {
         if (!input._csrf || !csrfTokens.has(input._csrf) || Date.now()-csrfTokens.get(input._csrf)>900_000) return send(403, { error: 'Token CSRF tidak valid. Muat ulang halaman.' });
       }
 
@@ -480,6 +528,137 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         }
       }
 
+      // ── Skill library ──
+      if (req.url.startsWith('/api/library/')) {
+        if (busy) return send(409, { error: 'Instalasi sedang berjalan' });
+        busy = true;
+        try {
+          const defs = harnessDefs({ home: home || os.homedir(), env });
+          const catalogIds = async () => new Set((await remoteSkills(mergedCatalog(await session.catalog()), sourceFetch)).map((s) => s.id));
+          const index = library.readIndex(libRoot);
+          const assertFree = async (id, allowSame) => {
+            if (!library.ID_RE.test(id)) throw new AuthError(400, 'ID skill wajib huruf kecil, angka, dan tanda hubung (maks 64).');
+            if ((await catalogIds()).has(id)) throw new AuthError(409, `ID ${id} sudah dipakai skill katalog Santriverse. Pilih ID lain.`);
+            if (index.skills[id] && !allowSame(index.skills[id])) throw new AuthError(409, `Skill ${id} sudah ada di library. Hapus dulu atau pakai tombol Update.`);
+          };
+          // Copies of a library skill that are active in some AI agent follow its new content.
+          const syncActive = (id) => {
+            const dir = path.join(libRoot, 'skills', id);
+            return defs.filter((h) => ownedMarker(path.join(h.skillsDir, id))).map((h) => { installSkills([{ id, dir, source: 'library' }], [h.skillsDir]); return h.name; });
+          };
+
+          if (req.url === '/api/library/github/preview') {
+            const scan = await library.scanGithub(input.url, { fetcher: githubFetch, includeScripts: input.includeScripts === true });
+            const previewId = crypto.randomBytes(24).toString('hex');
+            libraryPreviews.set(previewId, { scan, includeScripts: input.includeScripts === true, expires: Date.now() + 600_000 });
+            for (const [k, v] of libraryPreviews) if (v.expires <= Date.now()) libraryPreviews.delete(k);
+            return send(200, { previewId, source: scan.source, skills: scan.skills.map((s) => ({ key: s.key, id: s.id, description: s.description, generated: s.generated, repaired: s.repaired,
+              files: s.files.map((f) => f.rel), skipped: s.skipped, skillMd: s.skillMd.slice(0, 6000) })) });
+          }
+          if (req.url === '/api/library/github/save') {
+            const held = libraryPreviews.get(input.previewId);
+            if (!held || held.expires <= Date.now()) throw new AuthError(409, 'Preview kedaluwarsa. Preview ulang.');
+            if (!Array.isArray(input.picks) || !input.picks.length || input.picks.length > 20) throw new AuthError(400, 'Pilih minimal satu skill.');
+            const saved = [];
+            for (const pick of input.picks) {
+              const s = held.scan.skills.find((x) => x.key === pick.key);
+              if (!s) throw new AuthError(400, 'Skill tidak ada di preview.');
+              const id = String(pick.id || s.id), description = String(pick.description || s.description).replace(/\s+/g, ' ').trim().slice(0, 1024);
+              if (!description) throw new AuthError(400, `Deskripsi ${id} wajib.`);
+              await assertFree(id, () => false);
+              library.saveSkill(libRoot, { id, skillMd: library.withFrontmatter(s.skillMd, { name: id, description }), files: s.files,
+                meta: { type: 'github', ...held.scan.source, key: s.key, generated: s.generated, includeScripts: held.includeScripts, sourceHash: s.sourceHash, description } });
+              saved.push(id);
+            }
+            libraryPreviews.delete(input.previewId);
+            return send(200, { saved });
+          }
+          if (req.url === '/api/library/markdown') {
+            const skill = library.markdownSkill({ id: input.id, description: input.description, content: input.content, references: input.references || [] });
+            await assertFree(skill.id, (meta) => meta.type === 'markdown' && input.overwrite === true);
+            library.saveSkill(libRoot, { id: skill.id, skillMd: skill.skillMd, files: skill.files, meta: { type: 'markdown', description: skill.description } });
+            return send(200, { saved: [skill.id], synced: syncActive(skill.id) });
+          }
+          if (typeof input.id !== 'string' || !index.skills[input.id]) throw new AuthError(404, 'Skill tidak ada di library.');
+          if (req.url === '/api/library/delete') {
+            // Its SantriHub copies in the AI agents go too; folders the member made stay.
+            const deactivated = defs.filter((h) => ownedMarker(path.join(h.skillsDir, input.id))).map((h) => { removeInstalled({ kind: 'skill', id: input.id, skillsDir: h.skillsDir }); return h.name; });
+            return send(200, { ...library.removeSkill(libRoot, input.id), deactivated });
+          }
+          if (req.url === '/api/library/update') {
+            const meta = index.skills[input.id];
+            if (meta.type !== 'github') throw new AuthError(400, 'Hanya skill dari GitHub yang bisa dicek update.');
+            const scan = await library.scanGithub(meta.url, { fetcher: githubFetch, includeScripts: meta.includeScripts === true });
+            const s = scan.skills.find((x) => x.key === meta.key) || (scan.skills.length === 1 ? scan.skills[0] : null);
+            if (!s) throw new AuthError(409, 'Skill ini tidak lagi ditemukan di repository.');
+            if (s.sourceHash === meta.sourceHash) return send(200, { changed: false, id: input.id });
+            library.saveSkill(libRoot, { id: input.id, skillMd: library.withFrontmatter(s.skillMd, { name: input.id, description: meta.description || s.description }), files: s.files,
+              meta: { ...meta, ...scan.source, key: s.key, generated: s.generated, sourceHash: s.sourceHash } });
+            return send(200, { changed: true, id: input.id, synced: syncActive(input.id) });
+          }
+          return send(404, { error: 'Tidak ditemukan' });
+        } finally {
+          busy = false;
+        }
+      }
+
+      if (req.url === '/api/gateway') {
+        if (typeof input.id !== 'string' || typeof input.enable !== 'boolean') throw new AuthError(400, 'id dan enable wajib.');
+        const entry = mcpCatalog(mergedCatalog(await session.catalog())).find((m) => m.id === input.id);
+        if (!entry) throw new AuthError(400, 'MCP tidak terdaftar di katalog.');
+        const name = entry.builtin ? 'santri-skills' : entry.id;
+        const servers = gateway.setGatewayServer(gatewayPath, name, input.enable ? (entry.builtin ? ownServerEntry() : { command: entry.command, args: entry.args }) : null);
+        return send(200, { servers, hint: 'Reload AI agent yang memakai SantriHub Gateway agar daftar tool diperbarui.' });
+      }
+
+      // Turn one catalog skill / MCP server on or off for one harness.
+      if (req.url === '/api/harnesses/skill' || req.url === '/api/harnesses/mcp') {
+        if (typeof input.harness !== 'string' || typeof input.id !== 'string' || typeof input.enable !== 'boolean') throw new AuthError(400, 'harness, id dan enable wajib.');
+        const h = findHarness(harnessDefs({ home: home || os.homedir(), env }), input.harness);
+        if (busy) return send(409, { error: 'Instalasi sedang berjalan' });
+        busy = true;
+        try {
+          clearVerification();
+          const result = req.url === '/api/harnesses/skill'
+            ? setSkill(h, input.enable ? await resolveSkill(input.id) : { id: input.id }, input.enable)
+            : await (async () => { const m = await resolveMcp(input.id); return setMcp(h, m.name, m.base, input.enable, { stateFile: harnessStateFile }); })();
+          return send(200, { ...result, harness: h.id, hint: h.restartHint || `Reload ${h.name} agar perubahan terbaca.` });
+        } finally {
+          busy = false;
+        }
+      }
+
+      // ── Profiles: named sets of skills + MCP applied to an agent in one go ──
+      if (req.url.startsWith('/api/profiles/')) {
+        if (req.url === '/api/profiles/delete') return send(200, { deleted: profiles.deleteProfile(profilesPath, input.name) });
+        if (req.url === '/api/profiles/import') return send(200, { imported: profiles.importProfiles(profilesPath, input.data) });
+        const h = findHarness(harnessDefs({ home: home || os.homedir(), env }), input.harness);
+        if (req.url === '/api/profiles/save') {
+          // What SantriHub turned on in this agent becomes the profile.
+          const st = harnessStatus({ home: home || os.homedir(), env }).find((x) => x.id === h.id);
+          const known = new Set([...(await remoteSkills(mergedCatalog(await session.catalog()), sourceFetch)).map((s) => s.id), ...library.listLibrary(libRoot).map((s) => s.id)]);
+          const mcpIds = new Map([[GATEWAY_NAME, GATEWAY_ID], ...mcpCatalog(mergedCatalog(await session.catalog())).map((m) => [m.builtin ? 'santri-skills' : m.id, m.id])]);
+          const p = { skills: st.skills.filter((s) => s.managed && known.has(s.id)).map((s) => s.id), mcp: st.mcp.names.filter((n) => mcpIds.has(n)).map((n) => mcpIds.get(n)) };
+          if (!p.skills.length && !p.mcp.length) throw new AuthError(400, `Belum ada skill atau MCP dari SantriHub yang aktif di ${h.name}.`);
+          return send(200, { name: input.name, ...profiles.saveProfile(profilesPath, input.name, p) });
+        }
+        if (req.url === '/api/profiles/apply') {
+          const p = profiles.readProfiles(profilesPath)[input.name];
+          if (!p) throw new AuthError(404, 'Profil tidak ditemukan.');
+          if (busy) return send(409, { error: 'Instalasi sedang berjalan' });
+          busy = true;
+          const applied = [], failed = [];
+          try {
+            clearVerification();
+            // Add-only: items outside the profile stay as they are.
+            for (const id of p.skills) { try { setSkill(h, await resolveSkill(id), true); applied.push(id); } catch (e) { failed.push({ id, error: e.message }); } }
+            for (const id of p.mcp) { try { const m = await resolveMcp(id); setMcp(h, m.name, m.base, true, { stateFile: harnessStateFile }); applied.push(id); } catch (e) { failed.push({ id, error: e.message }); } }
+          } finally { busy = false; }
+          return send(200, { applied, failed, harness: h.id, hint: h.restartHint || `Reload ${h.name} agar perubahan terbaca.` });
+        }
+        return send(404, { error: 'Tidak ditemukan' });
+      }
+
       if (!['/api/install', '/api/mcp'].includes(req.url)) return send(404, { error: 'Tidak ditemukan' });
       if (!['project', 'global'].includes(input.scope)) throw new AuthError(400, 'Scope invalid');
       if (busy) return send(409, { error: 'Instalasi sedang berjalan' });
@@ -493,7 +672,7 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
           const before = fs.existsSync(config) ? Object.keys(configStatusNames(config)) : [];
           const name = entry.builtin ? 'santri-skills' : entry.id;
           const written = entry.builtin
-            ? addMcpServer(config, { command: process.execPath, args: [path.resolve(__dirname, '../bin/cli.js'), 'mcp-serve'] })
+            ? addMcpServer(config, ownServerEntry())
             : addMcpServer(config, { command: entry.command, args: entry.args }, entry.id);
           const after = Object.keys(written.mcpServers || {});
           return send(200, { message: `MCP ${name} terdaftar. Reload Antigravity.`, config, backup: written.backup,

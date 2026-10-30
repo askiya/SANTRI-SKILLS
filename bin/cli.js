@@ -41,9 +41,10 @@ Penggunaan:
   npx santriverse-skills list          Daftar skill dari semua repo
   npx santriverse-skills mcp-install   Daftarkan MCP server ke Antigravity
   npx santriverse-skills mcp-serve     Jalankan MCP stdio server
+  npx santriverse-skills mcp-gateway   Jalankan SantriHub MCP Gateway (MCP pilihan di SantriHub)
   npx santriverse-skills uninstall     Hapus instalasi milik Santri Skills
   npx santriverse-skills dashboard     Buka dashboard localhost (pilih skill/MCP via browser)
-  npx santriverse-skills app           Buka SantriHub sebagai jendela aplikasi (Windows + Edge)
+  npx santriverse-skills app           Buka SantriHub (Windows: jendela aplikasi; macOS/Linux: browser)
 
 Opsi:
   --scope=project|global               Target instalasi (default: tanya)
@@ -122,7 +123,12 @@ async function main() {
   const { command, flags } = parse(process.argv.slice(2));
   if (flags.version || command === 'version') return console.log(pkg.version);
   if (command === 'mcp-serve') return require('../src/mcp-server').serve(); // stdout must stay JSON-only
-  if (command === 'app') return require('../src/desktop-host').startDesktop({ version: pkg.version });
+  if (command === 'mcp-gateway') return require('../src/mcp-gateway').serve(); // ditto
+  if (command === 'app') {
+    // Windows: app window (Edge/Chrome/Brave). macOS/Linux: dashboard in the default browser.
+    if (process.platform === 'win32') return require('../src/desktop-host').startDesktop({ version: pkg.version });
+    return require('../src/browser-app').startBrowserApp({ version: pkg.version });
+  }
 
   console.log(banner(pkg.version));
   if (flags.help || command === 'help') return console.log(help());
@@ -147,5 +153,7 @@ async function main() {
 
 main().catch((err) => {
   console.error(`\n  ${c.red('✗')} ${err.message}\n`);
+  // The installed Windows app has no visible console: say it in a message box too.
+  if (process.platform === 'win32' && process.argv[2] === 'app') require('../src/desktop-host').alertStartupFailure(err);
   process.exitCode = 1;
 });

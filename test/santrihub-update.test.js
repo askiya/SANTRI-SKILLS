@@ -87,7 +87,18 @@ test('runner closes the app window, installs silently and reopens SantriHub', ()
   assert.match(script, /'C:\\Users\\O''Neil\\up\.exe'/, 'single quotes escaped for PowerShell');
   assert.match(script, /'\/SILENT','\/SUPPRESSMSGBOXES','\/NORESTART','\/CLOSEAPPLICATIONS'/);
   assert.match(script, /Contains\('C:\\Data\\EdgeProfile'\)/);
-  assert.match(script, /Start-Process -FilePath 'C:\\Apps\\SantriHub\.exe' -ArgumentList 'app'/);
+  assert.match(script, /Start-Process -FilePath 'C:\\Apps\\SantriHub\.exe' -ArgumentList 'app' -WindowStyle Hidden/);
+  assert.match(script, /Name='msedge\.exe'/);
+  // Installed app: node.exe + cli.js; a path with spaces keeps its own quotes.
+  const node = update.runnerScript({ installer: 'C:\\u.exe', exe: 'C:\\P\\SantriHub\\runtime\\node.exe', args: ["C:\\Users\\O'Neil Ali\\SantriHub\\app\\bin\\cli.js", 'app'], pid: 1, profile: 'C:\\D\\EdgeProfile', log: 'C:\\l.log' });
+  assert.match(node, /Start-Process -FilePath 'C:\\P\\SantriHub\\runtime\\node\.exe' -ArgumentList '"C:\\Users\\O''Neil Ali\\SantriHub\\app\\bin\\cli\.js"','app' -WindowStyle Hidden/);
+
+  const base = { installer: 'C:\\u.exe', exe: 'C:\\SantriHub.exe', pid: 1, log: 'C:\\l.log' };
+  assert.match(update.runnerScript({ ...base, profile: 'C:\\D\\ChromeProfile', browserProcess: 'chrome.exe' }), /Name='chrome\.exe'.*ChromeProfile/);
+  assert.match(update.runnerScript({ ...base, profile: 'C:\\D\\P', browserProcess: "x'; evil" }), /Name='msedge\.exe'/, 'odd process names are not interpolated');
+  const tab = update.runnerScript({ ...base, profile: null, browserProcess: undefined });
+  assert.doesNotMatch(tab, /Stop-Process/, 'default-browser tab: nothing to close');
+  assert.match(tab, /\/SILENT/);
 });
 
 test('release links are limited to this repository', () => {
@@ -157,6 +168,6 @@ test('app mode: one-click update only from the app window, and only when package
     assert.doesNotMatch(await (await fetch(dev.origin + '/__santrihub/desktop.js')).text(), /santrihubUpdate = 'self'/);
     const res = await dev.post('/__santrihub/update');
     assert.equal(res.status, 409);
-    assert.match((await res.json()).error, /SantriHub\.exe/);
+    assert.match((await res.json()).error, /SantriHub-Setup\.exe/);
   } finally { await stop(dev); }
 });
