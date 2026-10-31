@@ -1,7 +1,7 @@
 'use strict';
 // Assisted Gemini install: ZIP shaping, live premium verification, Gemini
-// detection, and the page bridge exercised in real headless Chrome against a
-// fixture that reads drops exactly like Gemini's Skills upload area.
+// detection, and the content script + page bridge exercised in real headless
+// Chrome against a fixture mirroring Gemini's Customize → Skills page.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -130,9 +130,35 @@ test('install flow verifies premium before downloading anything', () => {
   assert.ok(install.indexOf('verifyPremium()') < install.indexOf('downloadPackage('));
 });
 
+// ── Gemini files ───────────────────────────────────────────────────────────
+
+test('Gemini install skips file types Gemini refuses and reports them', () => {
+  const adapter = require('../extension/gemini-adapter.js');
+  const enc = (t) => new TextEncoder().encode(t);
+  const skill = { name: 'demo-skill', files: [
+    { path: 'SKILL.md', bytes: enc(SKILL) },
+    { path: 'references/spec.md', bytes: enc('# Spec') },
+    { path: 'scripts/types.ts', bytes: enc('x') },
+    { path: 'assets/demo.mp4', bytes: enc('x') },
+    { path: 'evals/evals.json', bytes: enc('{}') },
+  ] };
+  const out = adapter.geminiFiles(skill);
+  assert.deepEqual(out.files.map(f => f.path), ['SKILL.md', 'references/spec.md', 'evals/evals.json']);
+  assert.deepEqual(out.skipped, ['scripts/types.ts', 'assets/demo.mp4']);
+});
+
+test('panel opens Customize → Skills and reuses old or new Skills tabs', () => {
+  const adapter = require('../extension/gemini-adapter.js');
+  assert.equal(adapter.GEMINI_SKILLS_URL, 'https://gemini.google.com/customize/skills');
+  assert.deepEqual(adapter.GEMINI_SKILLS_TABS, ['https://gemini.google.com/customize/skills*', 'https://gemini.google.com/skills*']);
+  assert.equal((read('gemini-adapter.js').match(/query\(\{ url: GEMINI_SKILLS_TABS \}\)/g) || []).length, 2);
+});
+
 // ── Gemini page scripts ─────────────────────────────────────────────────────
 
-function loadDetector({ pathname = '/skills', body = '', inputs = [], buttons = [] } = {}) {
+const el = (props) => ({ offsetParent: {}, closest: () => null, hasAttribute: (n) => n in (props.attrs || {}), getAttribute: (n) => (props.attrs || {})[n] ?? null, ...props });
+
+function loadDetector({ pathname = '/customize/skills', body = '', inputs = [], buttons = [], editors = [] } = {}) {
   let listener;
   const ctx = {
     module: { exports: {} }, console, setTimeout, clearTimeout, crypto: webcrypto, atob, URL,
@@ -141,7 +167,7 @@ function loadDetector({ pathname = '/skills', body = '', inputs = [], buttons = 
     document: {
       body: { innerText: body },
       querySelector: () => null,
-      querySelectorAll: (sel) => (sel === 'input, textarea' ? inputs : sel === 'button' ? buttons : []),
+      querySelectorAll: (sel) => (sel === 'input, textarea' ? inputs : sel === 'button' ? buttons : sel.startsWith('textarea') ? editors : []),
     },
     chrome: { runtime: { onMessage: { addListener(fn) { listener = fn; } } } },
   };
@@ -158,9 +184,23 @@ test('detection reports only exact skill names Gemini lists', async () => {
   assert.equal(state.reviewOpen, false);
 });
 
+test('Skills page is recognised at /customize/skills and the old /skills path', () => {
+  for (const [pathname, expected] of [['/customize/skills', true], ['/customize/skills/new', true], ['/skills', true], ['/app', false], ['/customize/gems', false], ['/skillset', false]]) {
+    assert.equal(loadDetector({ pathname }).exports.isSkillsPage(), expected, pathname);
+  }
+});
+
+test('the list page Create menu is not mistaken for the Review screen', async () => {
+  const menu = el({ innerText: 'Buat', attrs: { 'aria-haspopup': 'menu', 'aria-label': 'Buat' } });
+  const { ask } = loadDetector({ body: 'demo-skill', buttons: [menu], editors: [el({})] });
+  const state = await ask({ type: 'skills:detect', names: ['demo-skill'] });
+  assert.equal(state.reviewOpen, false);
+  assert.deepEqual([...state.present], ['demo-skill']);
+});
+
 test('a skill still under review is not reported as created', async () => {
-  const create = { innerText: 'Buat', offsetParent: {} };
-  const { ask } = loadDetector({ inputs: [{ value: 'demo-skill' }], buttons: [create] });
+  const save = el({ innerText: 'Buat', attrs: { 'aria-label': 'Simpan keterampilan' } });
+  const { ask } = loadDetector({ inputs: [{ value: 'demo-skill' }], buttons: [save], editors: [el({})] });
   const state = await ask({ type: 'skills:detect', names: ['demo-skill'] });
   assert.deepEqual([...state.present], ['demo-skill']);
   assert.equal(state.reviewOpen, true);
@@ -179,6 +219,8 @@ test('extension never presses Create for the member', () => {
     assert.doesNotMatch(code, /['"](Buat|Create)['"]\)?\.click/, file);
   }
   assert.doesNotMatch(read('gemini-skills-bridge.js'), /\.click\(/);
+  // The only Create the content script may open is the menu trigger.
+  assert.match(read('gemini-skills.js'), /LABEL\.create\.test\(labelOf\(b\)\) && b\.hasAttribute\('aria-haspopup'\)/);
 });
 
 test('manifest runs the bridge in the page world on Gemini only, with no new permissions', () => {
@@ -190,35 +232,52 @@ test('manifest runs the bridge in the page world on Gemini only, with no new per
   assert.ok(manifest.content_scripts.some(cs => cs.js.includes('gemini-skills.js') && !cs.world));
 });
 
-// ── Bridge in real Chrome ───────────────────────────────────────────────────
+// ── Content script + bridge in real Chrome ──────────────────────────────────
 
 const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'].find(fs.existsSync);
 
-// Reads a drop the way Gemini's upload area does: webkitGetAsEntry + recursive readers.
-const FIXTURE = `<!doctype html><body><mat-dialog-container><div class="upload-area" style="width:300px;height:200px"></div></mat-dialog-container>
+// Mirrors Gemini's Customize → Skills as inspected on 31 Oct 2026: a "Buat"
+// menu trigger, an "Upload" menu item, the "Upload keahlian" dialog whose
+// upload area reads drops only through webkitGetAsEntry, then the editor with
+// plaintext-only fields and the saving "Buat" (aria-label "Simpan keterampilan").
+const FIXTURE = `<!doctype html><body><main id="main"><h1>Keterampilan</h1><button id="create" aria-label="Buat" aria-haspopup="menu" aria-expanded="false">Buat</button><h2>Diinstal</h2></main>
+<div class="cdk-overlay-container" id="overlay"></div>
 <script>
-window.__received = null;
-const area = document.querySelector('.upload-area');
-area.addEventListener('dragover', e => e.preventDefault());
-area.addEventListener('drop', async e => {
-  e.preventDefault();
-  const roots = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry());
-  const out = [];
-  async function walk(entry) {
-    if (!entry) return;
-    if (entry.isFile) { const f = await new Promise((ok, no) => entry.file(ok, no)); out.push([entry.fullPath, await f.text(), f.type]); return; }
-    const reader = entry.createReader();
-    for (;;) { const batch = await new Promise(ok => reader.readEntries(ok)); if (!batch.length) break; for (const c of batch) await walk(c); }
-  }
-  for (const r of roots) await walk(r);
-  window.__received = out.sort();
+const $ = (id) => document.getElementById(id);
+$('create').addEventListener('click', () => {
+  if ($('overlay').innerHTML) { $('overlay').innerHTML = ''; return; } // Material menus toggle
+  $('overlay').innerHTML = '<div role="menu"><button role="menuitem">Berkreasi dengan Gemini</button><button role="menuitem">Buat secara manual</button><button role="menuitem" id="upload-item">Upload</button></div>';
+  $('upload-item').addEventListener('click', openDialog);
 });
+function openDialog() {
+  $('overlay').innerHTML = '<mat-dialog-container><h2>Upload keahlian</h2><div class="upload-area" style="width:300px;height:200px">Tarik, atau pilih <button class="upload-link">file</button></div></mat-dialog-container>';
+  const area = document.querySelector('.upload-area');
+  area.addEventListener('dragover', e => e.preventDefault());
+  area.addEventListener('drop', async e => {
+    e.preventDefault();
+    const roots = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry());
+    const out = [];
+    async function walk(entry) {
+      if (!entry) return;
+      if (entry.isFile) { const f = await new Promise((ok, no) => entry.file(ok, no)); out.push([entry.fullPath, await f.text()]); return; }
+      const reader = entry.createReader();
+      for (;;) { const batch = await new Promise(ok => reader.readEntries(ok)); if (!batch.length) break; for (const c of batch) await walk(c); }
+    }
+    for (const r of roots) await walk(r);
+    if (!out.length) return; // what Gemini does with a plain synthetic drop
+    window.__received = out.sort();
+    $('overlay').innerHTML = '';
+    $('main').innerHTML = '<button aria-label="Kembali ke Keahlian">Keahlian</button><button id="save" aria-label="Simpan keterampilan">Buat</button>'
+      + '<input aria-label="Nama keahlian" value="demo-skill"><div contenteditable="plaintext-only" aria-label="Petunjuk keahlian">Demo</div>';
+    $('save').addEventListener('click', () => { $('main').innerHTML = '<h1>Keterampilan</h1><button aria-haspopup="menu">Buat</button><h2>Diinstal</h2><div>demo-skill</div>'; });
+  });
+}
 </script>`;
 
-test('bridge drops a whole skill folder that a Gemini-style reader accepts', { skip: !CHROME, timeout: 60000 }, async () => {
+test('content script and bridge go through Buat → Upload and stop at Review', { skip: !CHROME, timeout: 60000 }, async () => {
   const server = http.createServer((_req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(FIXTURE); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'skills-bridge-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'skills-gemini-'));
   const port = 32000 + Math.floor(Math.random() * 1000);
   const proc = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', `--user-data-dir=${home}`, `--remote-debugging-port=${port}`, 'about:blank'], { stdio: 'ignore' });
   let ws;
@@ -238,29 +297,30 @@ test('bridge drops a whole skill folder that a Gemini-style reader accepts', { s
     const run = async (expression) => { const r = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); assert.ok(!r.exceptionDetails, JSON.stringify(r.exceptionDetails)); return r.result.value; };
 
     await call('Page.enable');
-    await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/skills` });
-    for (let i = 0; i < 100 && !(await run("!!document.querySelector('.upload-area')")); i++) await new Promise(r => setTimeout(r, 50));
+    await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/customize/skills` });
+    for (let i = 0; i < 100 && !(await run("!!document.getElementById('create')")); i++) await new Promise(r => setTimeout(r, 50));
     await run(read('gemini-skills-bridge.js'));
+    await run(`(new Function('chrome', ${JSON.stringify(read('gemini-skills.js'))}))({ runtime: { onMessage: { addListener(fn) { window.__listener = fn; } } } }); 'loaded'`);
+    const ask = (msg) => run(`new Promise(resolve => window.__listener(${JSON.stringify(msg)}, {}, resolve))`);
 
-    const send = (payload) => run(`new Promise(resolve => {
-      addEventListener('message', function on(e) { if (e.data && e.data.source === 'santri-skills-bridge' && e.data.id === ${JSON.stringify(payload.id)}) { removeEventListener('message', on); resolve(e.data); } });
-      const enc = s => new TextEncoder().encode(s).buffer;
-      postMessage({ source: 'santri-skills', type: 'drop', id: ${JSON.stringify(payload.id)}, areaSelector: 'mat-dialog-container .upload-area', root: ${JSON.stringify(payload.root)},
-        files: ${JSON.stringify(payload.files)}.map(f => ({ path: f[0], buffer: enc(f[1]) })) }, location.origin);
-    })`);
+    // Before install: the list page's "Buat" menu is not a Review screen.
+    let state = await ask({ type: 'skills:detect', names: ['demo-skill'] });
+    assert.equal(state.reviewOpen, false);
 
-    const reply = await send({ id: 'ok-1', root: 'demo-skill', files: [['SKILL.md', SKILL], ['references/spec.md', '# Spec'], ['references/deep/x.txt', 'deep']] });
-    assert.equal(reply.ok, true);
-    let received;
-    for (let i = 0; i < 100 && !(received = await run('window.__received')); i++) await new Promise(r => setTimeout(r, 50));
-    assert.deepEqual(received, [
-      ['/demo-skill/SKILL.md', SKILL, 'text/markdown'],
-      ['/demo-skill/references/deep/x.txt', 'deep', 'text/plain'],
-      ['/demo-skill/references/spec.md', '# Spec', 'text/markdown'],
-    ]);
+    const b64 = (t) => Buffer.from(t).toString('base64');
+    const result = await ask({ type: 'skills:install', root: 'demo-skill', files: [{ path: 'SKILL.md', data: b64(SKILL) }, { path: 'references/spec.md', data: b64('# Spec') }] });
+    assert.deepEqual(result, { ok: true, stage: 'review' });
+    assert.deepEqual(await run('window.__received'), [['/demo-skill/SKILL.md', SKILL], ['/demo-skill/references/spec.md', '# Spec']]);
 
-    const bad = await send({ id: 'bad-1', root: '../escape', files: [['SKILL.md', SKILL]] });
-    assert.equal(bad.ok, false);
+    // Review is open: the skill is not reported as created, and the extension did not save it.
+    state = await ask({ type: 'skills:detect', names: ['demo-skill'] });
+    assert.equal(state.reviewOpen, true);
+    assert.equal(await run("!!document.getElementById('save')"), true);
+
+    await run("document.getElementById('save').click()"); // the member's click
+    state = await ask({ type: 'skills:detect', names: ['demo-skill'] });
+    assert.equal(state.reviewOpen, false);
+    assert.deepEqual(state.present, ['demo-skill']);
 
     await new Promise(r => setTimeout(r, 2300));
     assert.equal(await run("DataTransferItem.prototype.webkitGetAsEntry.toString().includes('[native code]')"), true, 'page API restored');

@@ -81,7 +81,7 @@ test('panel reports unavailable package endpoint rather than fabricating downloa
 
 test('Gemini URL targets the Skills page and manual steps are honest', () => {
   const adapter = load('gemini-adapter.js');
-  assert.equal(adapter.GEMINI_SKILLS_URL, 'https://gemini.google.com/skills');
+  assert.equal(adapter.GEMINI_SKILLS_URL, 'https://gemini.google.com/customize/skills');
   const steps = adapter.getManualSteps('skill');
   assert.ok(steps.length >= 3);
   // No step should claim automatic upload

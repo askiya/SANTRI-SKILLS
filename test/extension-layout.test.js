@@ -7,7 +7,7 @@ test('manifest public key matches callback allowlist',()=>{
  assert.equal(id,'fdhomioibdphiooncfcidjjbpoebfcep');
 });
 test('Chrome panel centers without overflow in dark and light themes',{skip:!chrome,timeout:45000},async()=>{
- const home=fs.mkdtempSync(path.join(process.env.TMPDIR||'C:/Users/Hype/AppData/Local/hermes/cache/scratch','skills-layout-'));
+ const home=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'skills-layout-'));
  const port=31000+Math.floor(Math.random()*1000),proc=spawn(chrome,['--headless=new','--disable-gpu','--no-first-run',`--user-data-dir=${home}`,`--remote-debugging-port=${port}`,'about:blank'],{stdio:'ignore'});
  let ws;
  try{

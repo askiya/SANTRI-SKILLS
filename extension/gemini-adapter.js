@@ -1,12 +1,18 @@
 // extension/gemini-adapter.js – Gemini Skills integration for the side panel.
 //
-// Assisted install: the extension opens gemini.google.com/skills and fills
-// Gemini's own upload form with the verified package; the member reviews and
-// presses "Create" in Gemini. Detection reports only what Gemini lists.
-// If any step fails, the panel falls back to the manual steps below.
+// Assisted install: the extension opens Gemini's Customize → Skills page and
+// hands the verified package to Gemini's own Create → Upload dialog;
+// the member reviews and presses "Create" in Gemini. Detection reports only
+// what Gemini lists. If any step fails, the panel falls back to the manual
+// steps below.
 
-const GEMINI_SKILLS_URL = 'https://gemini.google.com/skills';
+const GEMINI_SKILLS_URL = 'https://gemini.google.com/customize/skills';
+// gemini.google.com/skills redirects to the Customize page since Oct 2026.
+const GEMINI_SKILLS_TABS = ['https://gemini.google.com/customize/skills*', 'https://gemini.google.com/skills*'];
 const GEMINI_GEMS_URL = 'https://gemini.google.com/gems';
+
+// File types Gemini Skills refuses (support.google.com/gemini/answer/17094296).
+const GEMINI_UNSUPPORTED_RE = /\.(zip|rar|7z|tar|gz|tgz|doc|xls|ppt|raw|mp3|wav|m4a|ogg|flac|mp4|mov|avi|mkv|webm|ts|tsx|php|sql)$/i;
 
 function getManualSteps(type) {
   if (type === 'gem') {
@@ -20,9 +26,9 @@ function getManualSteps(type) {
   }
   return [
     'Download paket ZIP (klik "Download ZIP"). Tidak perlu diekstrak.',
-    'Buka gemini.google.com/skills (klik "Buka Gemini Skills").',
-    'Klik ikon Upload, lalu pilih file ZIP tadi.',
-    'Review isinya, lalu klik Buat di Gemini.',
+    'Buka Gemini → Customize → Skills (klik "Buka Gemini Skills").',
+    'Klik Buat (Create) → Upload, lalu tarik file ZIP tadi ke kotak upload (bila ditolak: ekstrak, lalu pilih "folder").',
+    'Review isinya, lalu klik Create (Buat) di bagian atas.',
   ];
 }
 
@@ -38,7 +44,7 @@ function tabReady(tabId, timeoutMs = 20000) {
 
 /** Reuse a Gemini Skills tab if one is open; otherwise open a new one (never hijack a chat tab). */
 async function openSkillsTab() {
-  const tabs = await chrome.tabs.query({ url: 'https://gemini.google.com/skills*' });
+  const tabs = await chrome.tabs.query({ url: GEMINI_SKILLS_TABS });
   const tab = tabs[0]
     ? await chrome.tabs.update(tabs[0].id, { url: GEMINI_SKILLS_URL, active: true })
     : await chrome.tabs.create({ url: GEMINI_SKILLS_URL, active: true });
@@ -70,18 +76,26 @@ function toBase64(bytes) {
   return btoa(s);
 }
 
+/** Skill files Gemini accepts, and the paths left out: { files, skipped }. */
+function geminiFiles(skill) {
+  const files = skill.files.filter(f => !GEMINI_UNSUPPORTED_RE.test(f.path));
+  const skipped = skill.files.filter(f => GEMINI_UNSUPPORTED_RE.test(f.path)).map(f => f.path);
+  return { files, skipped };
+}
+
 /**
  * Hand a prepared skill ({ name, files }) to Gemini's upload form.
- * Resolves { ok: true, tabId } once Gemini shows its Review screen.
+ * Resolves { ok: true, tabId, skipped } once Gemini shows its Review screen.
  */
 async function assistInstall(skill) {
+  const { files, skipped } = geminiFiles(skill);
   const tab = await openSkillsTab();
   const reply = await sendToTab(tab.id, {
     type: 'skills:install',
     root: skill.name,
-    files: skill.files.map(f => ({ path: f.path, data: toBase64(f.bytes) })),
+    files: files.map(f => ({ path: f.path, data: toBase64(f.bytes) })),
   });
-  return { ...reply, tabId: tab.id };
+  return { ...reply, tabId: tab.id, skipped };
 }
 
 /** Wait until Gemini lists the skill (member pressed Create). */
@@ -100,7 +114,7 @@ async function waitUntilListed(tabId, name, { timeoutMs = 5 * 60 * 1000, onTick 
 
 /** Names Gemini lists in an already-open Skills tab (no navigation). */
 async function detectListed(names) {
-  const tabs = await chrome.tabs.query({ url: 'https://gemini.google.com/skills*' });
+  const tabs = await chrome.tabs.query({ url: GEMINI_SKILLS_TABS });
   for (const tab of tabs) {
     try {
       const state = await chrome.tabs.sendMessage(tab.id, { type: 'skills:detect', names });
@@ -111,5 +125,5 @@ async function detectListed(names) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { GEMINI_SKILLS_URL, GEMINI_GEMS_URL, getManualSteps, openGeminiPage, openSkillsTab, assistInstall, waitUntilListed, detectListed, toBase64 };
+  module.exports = { GEMINI_SKILLS_URL, GEMINI_SKILLS_TABS, GEMINI_GEMS_URL, GEMINI_UNSUPPORTED_RE, geminiFiles, getManualSteps, openGeminiPage, openSkillsTab, assistInstall, waitUntilListed, detectListed, toBase64 };
 }

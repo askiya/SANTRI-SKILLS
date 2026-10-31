@@ -32,16 +32,16 @@ Hak akses dicek oleh API Santriverse, bukan oleh extension: setiap request `/api
 
 ## Pasang ke Gemini (2 klik)
 
-Gemini menerima Skill sebagai folder/ZIP dengan `SKILL.md` di folder utama (gemini.google.com/skills → Upload). Alur **Pasang ke Gemini**:
+Sejak Oktober 2026 Skills Gemini ada di **Customize → Skills** (`gemini.google.com/customize/skills`; URL lama `/skills` di-redirect ke sana) dengan tombol **Create → Upload** yang menerima `SKILL.md`, folder, atau ZIP dengan `SKILL.md` di folder utama. Alur **Pasang ke Gemini**:
 
 1. Cek Premium (`verifyPremium()`), unduh paket, verifikasi ukuran + SHA-256.
-2. `zip.js` membaca ZIP di memori (`DecompressionStream`, tanpa library), membuka folder pembungkus tunggal, membuang `.DS_Store`/`__MACOSX`/`.pyc`, menolak path `..`, dan memastikan nama di `SKILL.md` kebab-case.
-3. Panel membuka/memakai tab `gemini.google.com/skills` (tab chat tidak pernah diambil alih).
-4. `gemini-skills.js` (content script) membuka dialog Upload milik Gemini; `gemini-skills-bridge.js` (MAIN world) menjatuhkan paket sebagai folder ke area upload. Area itu membaca drop lewat `webkitGetAsEntry()`, jadi bridge menjawab hanya untuk item miliknya sendiri lalu memulihkan API halaman.
-5. Gemini menampilkan halaman Review. **Member yang menekan “Buat”** — extension tidak pernah menekannya.
-6. Panel memantau daftar Skills; status **Terdeteksi di Gemini** hanya muncul setelah Gemini sendiri menampilkan nama skill dan halaman Review sudah tertutup. Versi yang terpasang dicatat di `chrome.storage.local` untuk menandai **Update tersedia**.
+2. `zip.js` membaca ZIP di memori (`DecompressionStream`, tanpa library), membuka folder pembungkus tunggal, membuang `.DS_Store`/`__MACOSX`/`.pyc`, menolak path `..`, dan memastikan nama di `SKILL.md` kebab-case. `gemini-adapter.js` lalu melewati tipe file yang ditolak Gemini (arsip, audio/video, `.ts`, `.tsx`, `.php`, `.sql`, Office lama); file yang dilewati disebut di panel.
+3. Panel membuka/memakai tab Customize → Skills (tab chat tidak pernah diambil alih).
+4. `gemini-skills.js` (content script) membuka menu **Buat/Create** milik Gemini (tombol menu ber-`aria-haspopup`, bukan tombol Buat yang menyimpan), memilih **Upload**, lalu menunggu dialog **Upload keahlian**. `gemini-skills-bridge.js` (MAIN world) menjatuhkan paket sebagai folder ke `div.upload-area`. Area itu membaca drop hanya lewat `webkitGetAsEntry()` (terverifikasi 31 Okt 2026), jadi bridge menjawab hanya untuk item miliknya sendiri lalu memulihkan API halaman.
+5. Gemini menampilkan halaman Review. **Member yang menekan “Create” (Buat)** — extension tidak pernah menekannya.
+6. Halaman Review dikenali dari tombol simpan **Buat** (tanpa `aria-haspopup`, aria-label “Simpan keterampilan”) plus kolom `contenteditable`; tombol menu **Buat** di halaman daftar tidak dihitung. Panel memantau daftar Skills; status **Terdeteksi di Gemini** hanya muncul setelah Gemini sendiri menampilkan nama skill dan halaman Review sudah tertutup. Versi yang terpasang dicatat di `chrome.storage.local` untuk menandai **Update tersedia**.
 
-Jika satu langkah gagal (tampilan Gemini berubah, akun belum mendapat fitur Skills), panel menampilkan panduan manual: Download ZIP → Upload ZIP di Gemini Skills → Buat. ZIP tidak perlu diekstrak.
+Jika satu langkah gagal (tampilan Gemini berubah, akun belum mendapat fitur Skills), panel menampilkan panduan manual: Download ZIP → Customize → Skills → Create → Upload → Create. ZIP tidak perlu diekstrak. Untuk versi baru di Gemini: buka skill → **More → Replace skill**.
 
 Gems tetap memakai `gem_url`/langkah manual.
 

@@ -56,7 +56,7 @@ function renderCard(item) {
     <h3 class="card-title">${esc(item.name)}</h3>
     <span class="card-version">${esc(item.version || '')}</span>
   </div>
-  <p class="card-desc">${esc(item.description)}</p>
+  <p class="card-desc" title="${esc(item.description)}">${esc(item.description)}</p>
   <div class="card-footer">
     <span class="card-status status-${esc(line.cls)}">${esc(line.text)}</span>
     ${buttons}

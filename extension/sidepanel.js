@@ -247,15 +247,17 @@
       eyebrow: 'PASANG KE GEMINI',
       steps: ['Cek akses Premium', 'Unduh & verifikasi paket', 'Siapkan file skill', 'Buka Gemini Skills', 'Isi form upload Gemini', 'Klik Buat di tab Gemini'],
       failReasons: {
-        navigate: 'Halaman Gemini Skills tidak terbuka.',
-        upload_button: 'Tombol Upload Gemini tidak ditemukan (tampilan Gemini mungkin berubah, atau akun belum mendapat fitur Skills).',
-        upload_dialog: 'Dialog upload Gemini tidak terbuka.',
+        navigate: 'Halaman Gemini Customize → Skills tidak terbuka.',
+        busy: 'Tab Gemini masih menampilkan Review skill lain. Selesaikan atau batalkan dulu, lalu coba lagi.',
+        create_menu: 'Tombol Create (Buat) di Gemini Skills tidak ditemukan (tampilan Gemini mungkin berubah, atau akun belum mendapat fitur Skills).',
+        upload_item: 'Menu Upload (Unggah) di bawah Create tidak muncul.',
+        upload_dialog: 'Dialog "Upload keahlian" Gemini tidak terbuka.',
         drop: 'Gemini menolak file yang dikirim.',
         review_timeout: 'Gemini belum menampilkan halaman Review.',
       },
       waitTitle: 'Tinggal satu klik',
-      waitHint: 'Review isi skill di tab Gemini, lalu klik "Buat". Panel ini mendeteksi otomatis begitu skill muncul.',
-      pendingHint: 'Belum terdeteksi. Kalau sudah klik "Buat", buka gemini.google.com/skills lalu tekan ↻ di katalog.',
+      waitHint: 'Review isi skill di tab Gemini, lalu klik "Create" (Buat) di bagian atas. Panel ini mendeteksi otomatis begitu skill muncul.',
+      pendingHint: 'Belum terdeteksi. Kalau sudah klik "Create", buka Gemini → Customize → Skills lalu tekan ↻ di katalog.',
       doneTitle: 'Terpasang di Gemini ✓',
       doneHint: (name) => `Pakai di chat Gemini dengan mengetik / lalu pilih "${name}".`,
     },
@@ -358,10 +360,11 @@
       }
       step(3, 'done');
       step(4, 'done');
+      const skippedNote = result.skipped?.length ? ` File dilewati (tidak didukung ${target === 'chatgpt' ? 'ChatGPT' : 'Gemini'}): ${result.skipped.join(', ')}.` : '';
 
       step(5, 'active');
       $('#install-title').textContent = cfg.waitTitle;
-      setHint(cfg.waitHint, 'info');
+      setHint(cfg.waitHint + skippedNote, 'info');
       const installed = target === 'chatgpt'
         ? await waitUntilChatGptInstalled(result.tabId, result.pluginId)
         : await waitUntilListed(result.tabId, skill.name);
@@ -435,7 +438,7 @@
     $('#tutorial-open').textContent = chatgpt ? 'Buka ChatGPT Plugins' : 'Buka Gemini Skills';
     $('#tutorial-honesty').textContent = chatgpt
       ? 'ChatGPT menerima ZIP plugin langsung. Konfirmasi akhir (klik Instal Plugin) selalu dilakukan member di ChatGPT.'
-      : 'Gemini menerima file ZIP langsung. Konfirmasi akhir (klik Buat) selalu dilakukan member di Gemini.';
+      : 'Gemini menerima file ZIP langsung. Konfirmasi akhir (klik Create/Buat) selalu dilakukan member di Gemini.';
     type === 'gem' ? hide($('#tutorial-download')) : show($('#tutorial-download'));
     only(tutorialSection);
   }
@@ -449,7 +452,7 @@
     const type = tutorialSection.dataset.itemType || 'skill';
     if (tutorialSection.dataset.target === 'chatgpt' && typeof openChatGptPluginsPage === 'function') return openChatGptPluginsPage();
     if (typeof openGeminiPage === 'function') openGeminiPage(type);
-    else chrome.tabs.create({ url: 'https://gemini.google.com/skills' });
+    else chrome.tabs.create({ url: 'https://gemini.google.com/customize/skills' });
   });
 
   $('#member-confirm').addEventListener('click', () => {
