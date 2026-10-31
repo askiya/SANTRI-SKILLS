@@ -1071,3 +1071,53 @@ body { font-size: 16px; line-height: 1.6; }
   .scope-toggle span { display: none; }
   .header-actions { gap: 6px; }
 }
+
+/* ── Pembaruan: steps + progress bar while the installer downloads, verifies and installs ── */
+.update-progress { display: grid; gap: 10px; margin-top: 16px; padding: 14px; border: 1px solid rgb(var(--line)); border-radius: var(--r-md); background: rgb(var(--canvas) / .6); }
+.update-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.update-steps li { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; color: rgb(var(--muted)); font-size: 11px; font-weight: 600; text-align: center; }
+.update-steps li::before { content: ""; display: grid; place-items: center; width: 22px; height: 22px; border: 2px solid rgb(var(--line)); border-radius: 999px; background: rgb(var(--panel)); color: #fff; font-size: 12px; font-weight: 700; z-index: 1; box-sizing: border-box; }
+.update-steps li:not(:last-child)::after { content: ""; position: absolute; top: 10px; left: calc(50% + 13px); right: calc(-50% + 13px); height: 2px; border-radius: 2px; background: rgb(var(--line)); transition: background .3s ease; }
+.update-steps li.done { color: rgb(var(--ink)); }
+.update-steps li.done::before { content: "✓"; border-color: #8b5cf6; background: #8b5cf6; }
+.update-steps li.done::after { background: #8b5cf6; }
+.update-steps li.active { color: rgb(var(--ink)); }
+.update-steps li.active::before { border-color: #8b5cf6 rgb(var(--line)) rgb(var(--line)) rgb(var(--line)); animation: update-spin .8s linear infinite; }
+.update-bar { position: relative; height: 8px; overflow: hidden; border-radius: 999px; background: rgb(var(--line) / .7); }
+.update-bar i { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: inherit; background: linear-gradient(90deg, #7c3aed, #a78bfa); transition: width .35s ease; overflow: hidden; }
+.update-bar i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgb(255 255 255 / .35), transparent); transform: translateX(-100%); animation: update-shine 1.3s ease-in-out infinite; }
+.update-progress.waiting .update-bar i { width: 30% !important; animation: update-slide 1.2s ease-in-out infinite; }
+.update-progress.finishing .update-bar i { background: linear-gradient(90deg, #7c3aed, #34d399); }
+.update-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: rgb(var(--muted)); font-size: var(--fs-xs); line-height: 1.5; }
+.update-meta b { flex: none; color: rgb(var(--ink)); font-variant-numeric: tabular-nums; }
+@keyframes update-spin { to { transform: rotate(360deg); } }
+@keyframes update-shine { to { transform: translateX(100%); } }
+@keyframes update-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) { .update-steps li.active::before, .update-bar i::after, .update-progress.waiting .update-bar i { animation: none; } .update-bar i { transition: none; } }
+
+/* ── Cek & Tes · bukti skill: three numbered steps, two live indicators, per-skill result ── */
+.proof-lead { color: rgb(var(--muted)); font-size: var(--fs-sm); line-height: 1.6; }
+.proof-steps { display: grid; gap: 10px; margin: 14px 0 0; padding: 0; list-style: none; counter-reset: proof; }
+.proof-steps > li { display: grid; gap: 10px; padding: 14px 14px 14px 52px; position: relative; border: 1px solid rgb(var(--line)); border-radius: var(--r-md); background: rgb(var(--canvas) / .45); counter-increment: proof; }
+.proof-steps > li::before { content: counter(proof); position: absolute; left: 14px; top: 14px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 999px; background: rgb(var(--accent)); color: #fff; font-size: var(--fs-xs); font-weight: 700; }
+.proof-step-head { display: grid; gap: 2px; }
+.proof-step-head b { font-size: var(--fs-md); }
+.proof-step-head span { color: rgb(var(--muted)); font-size: var(--fs-xs); line-height: 1.5; }
+.proof-steps .check-actions { margin: 0; }
+.proof-steps #control-feedback { margin: 0; color: rgb(var(--muted)); font-size: var(--fs-xs); }
+.proof-steps #control-feedback:empty { display: none; }
+.proof-steps .copy-example { margin: 0; }
+.proof-status { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.proof-line { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid rgb(var(--line)); border-radius: 999px; color: rgb(var(--muted)); font-size: var(--fs-xs); }
+.proof-line b { color: rgb(var(--muted)); font-weight: 600; }
+.proof-line:not(.ok)::before { content: ""; width: 8px; height: 8px; border-radius: 999px; background: rgb(var(--muted) / .6); animation: proof-wait 1.2s ease-in-out infinite; }
+.proof-line.ok { border-color: rgb(var(--ok) / .5); color: rgb(var(--ink)); }
+.proof-line.ok b { color: rgb(var(--ok)); }
+.proof-about { margin-top: 12px; color: rgb(var(--muted)); font-size: var(--fs-xs); }
+.proof-about summary { cursor: pointer; font-weight: 600; }
+.proof-about p { margin-top: 6px; line-height: 1.6; }
+.proof-skills { display: grid; gap: 8px; margin-top: 14px; }
+.proof-skills ul { display: grid; gap: 4px; max-height: 260px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.proof-skills li { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: var(--r-sm); background: rgb(var(--canvas) / .5); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+@keyframes proof-wait { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .proof-line:not(.ok)::before { animation: none; } }

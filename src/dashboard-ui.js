@@ -474,17 +474,38 @@ async function checkUpdate(){try{updateInfo=await getJson('/api/update');const b
 function openUpdate(){if(!updateInfo)return;const self=selfUpdate();
   $('#update-current').textContent='v'+updateInfo.current;$('#update-latest').textContent='v'+updateInfo.latest;
   $('#update-notes').href=updateInfo.releaseUrl;$('#update-command').textContent=updateInfo.command;$('#update-feedback').textContent='';
-  show($('#update-self'),self);show($('#update-manual'),!self);show($('#update-now'),self);$('#update-now').disabled=false;$('#update-now').textContent='Update sekarang';
+  show($('#update-self'),self);show($('#update-manual'),!self);show($('#update-now'),self);$('#update-now').disabled=false;$('#update-now').textContent='Update sekarang';show($('#update-progress'),false);
   updateDialog.showModal()}
 $('#update-btn').onclick=openUpdate;
 $('#update-close').onclick=()=>updateDialog.close();
 $('#update-copy').onclick=async()=>{try{await navigator.clipboard.writeText(updateInfo.command);done('✓ Perintah update disalin.')}catch{fail(new Error('Clipboard tidak tersedia. Salin perintah secara manual.'))}};
-$('#update-now').onclick=async()=>{const btn=$('#update-now'),fb=$('#update-feedback');btn.disabled=true;btn.textContent='Mengunduh…';
-  fb.textContent='Mengunduh installer resmi v'+updateInfo.latest+' dan memeriksa SHA-256…';
+// Progress: the POST below runs the whole download; /__santrihub/update/status reports where it is.
+// Steps: 0 Unduh (check, sums, download) · 1 Cek SHA-256 · 2 Pasang · 3 Buka ulang.
+const UPDATE_STEP={check:0,sums:0,download:0,verify:1,install:2,restart:3};
+let updateRunning=false,updateSpeed=null;
+const mb=n=>(n/1048576).toLocaleString('id-ID',{minimumFractionDigits:1,maximumFractionDigits:1});
+function renderUpdateProgress(s){const v='v'+(s.version||updateInfo?.latest||''),step=UPDATE_STEP[s.stage]??0,frac=s.total?Math.min(1,s.received/s.total):0;
+  let pct={check:1,sums:3,verify:90,install:95,restart:100}[s.stage]??0,text='Menyiapkan…';
+  if(s.stage==='check')text='Memeriksa versi terbaru…';
+  if(s.stage==='sums')text='Mengambil daftar checksum resmi…';
+  if(s.stage==='download'){pct=3+Math.round(frac*84);const now=performance.now();
+    if(updateSpeed&&now>updateSpeed.at){const rate=(s.received-updateSpeed.received)/((now-updateSpeed.at)/1000);updateSpeed.rate=updateSpeed.rate?updateSpeed.rate*.7+rate*.3:rate}
+    updateSpeed={at:now,received:s.received,rate:updateSpeed?.rate||0};
+    text=`Mengunduh installer ${v} · ${mb(s.received)}${s.total?' / '+mb(s.total):''} MB${updateSpeed.rate>0?' · '+mb(updateSpeed.rate)+' MB/s':''}`}
+  if(s.stage==='verify')text='Mencocokkan SHA-256 installer dengan rilis resmi…';
+  if(s.stage==='install')text='Installer terverifikasi. Menyiapkan pemasangan…';
+  if(s.stage==='restart')text=`SantriHub akan tertutup sebentar, memasang ${v}, lalu terbuka lagi sendiri.`;
+  const prog=$('#update-progress');show(prog,true);prog.classList.toggle('waiting',s.stage==='download'&&!s.total||s.stage==='check'||s.stage==='sums');prog.classList.toggle('finishing',s.stage==='restart');
+  $('#update-bar-fill').style.width=pct+'%';$('#update-bar').setAttribute('aria-valuenow',String(pct));$('#update-pct').textContent=pct+'%';$('#update-stage').textContent=text;
+  $$('[data-update-step]').forEach(li=>{const i=Number(li.dataset.updateStep);li.className=i<step?'done':i===step?'active':''})}
+async function pollUpdate(){try{const s=await getJson('/__santrihub/update/status');if(updateRunning&&s.stage!=='idle'&&s.stage!=='error')renderUpdateProgress(s)}catch{/* app closing */}}
+updateDialog.addEventListener('cancel',e=>{if(updateRunning)e.preventDefault()});
+$('#update-now').onclick=async()=>{const btn=$('#update-now'),fb=$('#update-feedback');btn.disabled=true;btn.textContent='Memperbarui…';$('#update-close').disabled=true;
+  fb.textContent='';updateRunning=true;updateSpeed=null;renderUpdateProgress({stage:'check'});const timer=setInterval(pollUpdate,350);
   try{const res=await fetch('/__santrihub/update',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const data=await res.json().catch(()=>({}));
     if(!res.ok)throw new Error(data.error||'Pembaruan gagal ('+res.status+').');
-    btn.textContent='Memasang…';fb.textContent='Installer terverifikasi. SantriHub ditutup sebentar lalu terbuka lagi di v'+(data.version||updateInfo.latest)+'.';log('Pembaruan ke v'+(data.version||updateInfo.latest)+' dimulai.')}
-  catch(e){btn.disabled=false;btn.textContent='Coba lagi';fb.textContent=e.message;fail(e)}};
+    clearInterval(timer);renderUpdateProgress({stage:'restart',version:data.version||updateInfo.latest});btn.textContent='Membuka ulang…';log('Pembaruan ke v'+(data.version||updateInfo.latest)+' dimulai.')}
+  catch(e){clearInterval(timer);updateRunning=false;show($('#update-progress'),false);$('#update-close').disabled=false;btn.disabled=false;btn.textContent='Coba lagi';fb.textContent=e.message;fail(e)}};
 checkUpdate();
 
 // ─ Navigation ─
@@ -669,7 +690,7 @@ function checkControls(){
 }
 async function showCheck(){
  if($('#check-panel').open)return;stopCheckPoll();const epoch=++checkEpoch;checkBusy=true;checkInventory=null;checkVerified=false;checkRequest=new AbortController();const signal=checkRequest.signal;
- $('#check-summary').textContent='Memeriksa file dan konfigurasi global…';$('#check-results').innerHTML='';$('#check-counts').textContent='';$('#check-targets').textContent='';$('#check-proof').textContent='Belum ada callback.';$('#check-proof').classList.remove('proof-ok');$('#control-feedback').textContent='';show($('#force-antigravity'),false);show($('#check-retry'),false);$('#check-panel').showModal();checkState(0,false);
+ $('#check-summary').textContent='Memeriksa file dan konfigurasi global…';$('#check-results').innerHTML='';$('#check-counts').textContent='';$('#check-targets').textContent='';$('#check-proof').textContent='Belum ada callback.';$('#check-proof').classList.remove('proof-ok');proofLine('proof-mcp',false);proofLine('proof-skill',false);show($('#check-skill-list'),false);$('#check-outcome').classList.remove('proof-ok');$('#control-feedback').textContent='';show($('#force-antigravity'),false);show($('#check-retry'),false);$('#check-panel').showModal();checkState(0,false);
  try{const r=await post('/api/verify',{scope:'global',skillIds:[...selectedSkills]},signal);if(epoch===checkEpoch&&$('#check-panel').open){checkInventory=r;renderCheck(r)}}catch(e){if(epoch===checkEpoch&&e.name!=='AbortError')$('#check-summary').textContent='Pemeriksaan gagal: '+e.message}finally{if(epoch===checkEpoch){checkBusy=false;checkRequest=null;checkControls()}}
 }
 $('#check-test').onclick=showCheck;
@@ -689,25 +710,36 @@ async function pollCheckProof(epoch=checkPollEpoch){
  if(!$('#check-panel').open||checkStep!==1||epoch!==checkPollEpoch)return;
  try{checkRequest=new AbortController();const proof=await getJson('/api/verification/status',checkRequest.signal);if(epoch!==checkPollEpoch||!$('#check-panel').open||checkStep!==1)return;checkRequest=null;
   checkVerified=proof.verified===true&&proof.evidence?.server==='santri-skills'&&proof.evidence?.level==='bridge-mcp-loaded'&&proof.evidence?.source==='local-capability-callback';
-  if(checkVerified){$('#check-proof').textContent='Callback asli diterima · bridge MCP santri-skills saja. Identitas client tidak diautentikasi; MCP lain dan Skills belum terbukti dimuat IDE.';$('#check-proof').classList.add('proof-ok');$('#check-outcome').textContent=$('#check-proof').textContent;checkState(2);return}
-  $('#check-proof').textContent=proof.pending?'Menunggu callback asli bridge MCP santri-skills. '+(proof.expiresAt?'Batas server: '+new Date(proof.expiresAt).toLocaleTimeString()+'.':''):'Callback kedaluwarsa atau konfigurasi berubah. Belum terverifikasi; coba lagi.';
+  const skill=proof.skillProof?.verified===true;proofLine('proof-mcp',checkVerified);proofLine('proof-skill',skill);
+  if(skill){renderSkillProof(proof.skillProof);checkState(2);return}
+  if(checkVerified){$('#check-proof').textContent='Callback asli diterima · bridge MCP santri-skills tersambung. Menunggu kode dari skill santrihub-cek: tempel kalimat di langkah 3 ke chat Agent baru.';$('#check-proof').classList.add('proof-ok');$('#check-finish').textContent='Lihat hasil (MCP saja)'}
+  else $('#check-proof').textContent=proof.pending?'Menunggu callback asli bridge MCP santri-skills. '+(proof.expiresAt?'Batas server: '+new Date(proof.expiresAt).toLocaleTimeString()+'.':''):'Callback kedaluwarsa atau konfigurasi berubah. Belum terverifikasi; coba lagi.';
   show($('#check-retry'),!proof.pending);if(!proof.pending)return;
  }catch(e){if(epoch!==checkPollEpoch||e.name==='AbortError')return;checkRequest=null;$('#check-proof').textContent='Tes gagal: '+e.message;show($('#check-retry'));return}
  checkTimer=setTimeout(()=>pollCheckProof(epoch),1500);
 }
+function proofLine(id,ok){const el=$('#'+id);el.classList.toggle('ok',ok);el.querySelector('b').textContent=ok?'✓ terbukti':'menunggu'}
+const BRIDGE_ONLY='Callback asli diterima · bridge MCP santri-skills saja. Identitas client tidak diautentikasi; MCP lain dan Skills belum terbukti dimuat IDE.';
+function renderSkillProof(p){const all=p.seen.length+p.notSeen.length;
+  $('#check-summary').textContent='Global semua workspace · Skill dimuat TERBUKTI lewat kode cek santrihub-cek. Identitas client tidak diautentikasi.';$('#check-outcome').classList.add('proof-ok');
+  $('#check-outcome').textContent=`Skill dimuat · TERBUKTI. Agent membaca kode dari skill santrihub-cek di sesi ini dan mengirimnya lewat MCP santri-skills. ${p.seen.length} dari ${all} skill terpasang disebut agent. Identitas client tidak diautentikasi.`;
+  const box=$('#check-skill-list'),row=(id,ok)=>{const li=el('li',ok?'ok':'warn');li.append(el('span','pill '+(ok?'ok':'warn'),ok?'DISEBUT':'TIDAK DISEBUT'),el('span',null,id));return li};
+  const list=el('ul');list.append(...p.seen.map(id=>row(id,true)),...p.notSeen.map(id=>row(id,false)));
+  box.replaceChildren(el('strong',null,'Skill yang dilaporkan agent'),list,el('small','muted',p.notSeen.length?'Tidak disebut belum tentu gagal: agent bisa merangkum. Tanyakan langsung di chat, misalnya "Gunakan skill <nama>".':'Semua skill di folder global disebut agent.'));show(box,all>0)}
 async function startCheckProof(){
  if(checkBusy||checkStep!==1||!$('#check-panel').open||$('#check-start').disabled)return;stopCheckPoll();const epoch=checkEpoch,pollEpoch=checkPollEpoch;checkBusy=true;checkVerified=false;checkRequest=new AbortController();const signal=checkRequest.signal;show($('#check-retry'),false);$('#check-proof').textContent='Menyiapkan callback bridge…';checkControls();
- try{await post('/api/verification/start',{scope:'global'},signal);if(epoch===checkEpoch&&pollEpoch===checkPollEpoch)await pollCheckProof(pollEpoch)}catch(e){if(epoch===checkEpoch&&e.name!=='AbortError'){$('#check-proof').textContent='Tes gagal: '+e.message;show($('#check-retry'))}}finally{if(epoch===checkEpoch){checkBusy=false;checkControls()}}
+ try{const r=await post('/api/verification/start',{scope:'global'},signal);if(r.prompt)$('#proof-prompt').textContent=r.prompt;proofLine('proof-mcp',false);proofLine('proof-skill',false);$('#check-finish').textContent='Tutup tanpa verifikasi';if(epoch===checkEpoch&&pollEpoch===checkPollEpoch)await pollCheckProof(pollEpoch)}catch(e){if(epoch===checkEpoch&&e.name!=='AbortError'){$('#check-proof').textContent='Tes gagal: '+e.message;show($('#check-retry'))}}finally{if(epoch===checkEpoch){checkBusy=false;checkControls()}}
 }
+$('#copy-proof-prompt').onclick=e=>copyText($('#proof-prompt').textContent,e.currentTarget);
 $('#check-start').onclick=startCheckProof;$('#check-retry').onclick=startCheckProof;
 $('#check-back').onclick=()=>{if(checkBusy)return;stopCheckPoll();checkVerified=false;checkState(0)};
-$('#check-finish').onclick=()=>{if(checkBusy)return;if(checkStep===0){checkState(1);return}if(checkStep===1){stopCheckPoll();status('Tes ditutup tanpa verifikasi; belum ada callback asli.',true);closeCheck();return}closeCheck()};
+$('#check-finish').onclick=()=>{if(checkBusy)return;if(checkStep===0){checkState(1);return}if(checkStep===1){stopCheckPoll();if(checkVerified){$('#check-outcome').textContent=BRIDGE_ONLY;$('#check-outcome').classList.remove('proof-ok');show($('#check-skill-list'),false);checkState(2);return}status('Tes ditutup tanpa verifikasi; belum ada callback asli.',true);closeCheck();return}closeCheck()};
 $('#close-check').onclick=closeCheck;
 $('#check-panel').addEventListener('cancel',e=>{e.preventDefault();closeCheck()});
 $('#check-panel').addEventListener('close',()=>{stopCheckPoll();checkEpoch++;checkBusy=false;setTimeout(()=>{if(!$('#locked').open&&!document.querySelector('dialog[open]'))$('#check-test').focus()})});
 async function checkControl(action,force=false){
  if(checkBusy||!$('#check-panel').open||checkStep!==1)return;const epoch=checkEpoch;checkBusy=true;checkControls();
- try{await post('/api/antigravity/control',action==='launch'?{action}:{action,confirmClose:true,force,confirmForce:force});if(epoch===checkEpoch){show($('#force-antigravity'),false);$('#control-feedback').textContent=action==='launch'?'Permintaan buka dikirim. Ini bukan bukti callback.':'Restart selesai. Panggil santrihub_status; restart bukan bukti callback.'}}catch(e){if(epoch===checkEpoch){if(!force&&e.forceRequired)show($('#force-antigravity'));$('#control-feedback').textContent=e.message;fail(e)}}finally{if(epoch===checkEpoch){checkBusy=false;checkControls()}}
+ try{await post('/api/antigravity/control',action==='launch'?{action}:{action,confirmClose:true,force,confirmForce:force});if(epoch===checkEpoch){show($('#force-antigravity'),false);$('#control-feedback').textContent=action==='launch'?'Permintaan buka dikirim. Ini bukan bukti callback.':'Restart selesai. Buka chat Agent baru, lalu tempel kalimat di langkah 3. Restart sendiri bukan bukti.'}}catch(e){if(epoch===checkEpoch){if(!force&&e.forceRequired)show($('#force-antigravity'));$('#control-feedback').textContent=e.message;fail(e)}}finally{if(epoch===checkEpoch){checkBusy=false;checkControls()}}
 }
 $('#open-antigravity').onclick=()=>checkControl('launch');
 $('#restart-antigravity').onclick=()=>{if(checkBusy||!$('#check-panel').open)return;$('#restart-confirm').returnValue='cancel';$('#restart-confirm').showModal()};

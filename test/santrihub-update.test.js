@@ -73,6 +73,11 @@ test('installer download requires the SHA-256 from the same release', async () =
     const file = await update.downloadInstaller('v0.2.4', dir, { fetchImpl: fake(`${'a'.repeat(64)}  SantriHub.exe\n${good}  SantriHub-Setup.exe\n`) });
     assert.equal(path.basename(file), 'SantriHub-Setup-v0.2.4.exe');
     assert.deepEqual(fs.readFileSync(file), exe);
+    const seen = [];
+    await update.downloadInstaller('v0.2.4', dir, { fetchImpl: fake(`${good}  SantriHub-Setup.exe`), onProgress: (p) => seen.push(p) });
+    assert.equal(seen[0].stage, 'sums');
+    assert.equal(seen.at(-1).stage, 'verify');
+    assert.equal(seen.filter((p) => p.stage === 'download').at(-1).received, exe.length);
     await assert.rejects(update.downloadInstaller('v0.2.4', dir, { fetchImpl: fake(`${good}  SantriHub-Setup.exe`, Buffer.from('tampered')) }), /Checksum installer tidak cocok/);
     await assert.rejects(update.downloadInstaller('v0.2.4', dir, { fetchImpl: fake(`${good}  Other.exe`) }), /tidak mencantumkan installer/);
     await assert.rejects(update.downloadInstaller('../evil', dir, { fetchImpl: fake('') }), /Versi rilis tidak valid/);
@@ -142,8 +147,9 @@ test('app mode: one-click update only from the app window, and only when package
 
   let calls = 0;
   const opened = [];
-  const app = await start({ update: async () => { calls++; return { version: '0.2.4' }; }, open: (u) => opened.push(u) });
+  const app = await start({ update: async () => { calls++; return { version: '0.2.4' }; }, updateStatus: () => ({ stage: 'download', received: 5, total: 10 }), open: (u) => opened.push(u) });
   try {
+    assert.deepEqual(await (await fetch(app.origin + '/__santrihub/update/status')).json(), { stage: 'download', received: 5, total: 10 });
     assert.match(await (await fetch(app.origin + '/__santrihub/desktop.js')).text(), /santrihubUpdate = 'self'/);
     assert.equal((await app.post('/__santrihub/update', {}, { Origin: 'https://evil.example' })).status, 403);
     assert.equal(calls, 0);
@@ -166,6 +172,7 @@ test('app mode: one-click update only from the app window, and only when package
   const dev = await start({}); // `node bin/cli.js app`: no self-update
   try {
     assert.doesNotMatch(await (await fetch(dev.origin + '/__santrihub/desktop.js')).text(), /santrihubUpdate = 'self'/);
+    assert.deepEqual(await (await fetch(dev.origin + '/__santrihub/update/status')).json(), { stage: 'idle' });
     const res = await dev.post('/__santrihub/update');
     assert.equal(res.status, 409);
     assert.match((await res.json()).error, /SantriHub-Setup\.exe/);

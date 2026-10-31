@@ -76,3 +76,29 @@ test('real MCP stdio process reports callback without browser capability',()=>fi
  }finally{child.kill();child.stdin.end()}
 }));
 test('safe uninstall refuses foreign skill, invalid marker and MCP collision, backs up config',()=>{const home=tmp();try{const dir=path.join(home,'skills'),file=path.join(home,'mcp_config.json');fs.mkdirSync(path.join(dir,'foreign'),{recursive:true});fs.writeFileSync(path.join(dir,'foreign','SKILL.md'),'foreign');assert.throws(()=>removeInstalled({kind:'skill',id:'foreign',skillsDir:dir,mcpFile:file}),/milik|marker/);const malformed=path.join(dir,'malformed');fs.mkdirSync(malformed);fs.writeFileSync(path.join(malformed,'SKILL.md'),'keep');fs.writeFileSync(path.join(malformed,'.santri-skills.json'),'{');assert.throws(()=>removeInstalled({kind:'skill',id:'malformed',skillsDir:dir,mcpFile:file}),/milik|marker/);assert.equal(fs.readFileSync(path.join(malformed,'SKILL.md'),'utf8'),'keep');const own=path.join(dir,'own');fs.mkdirSync(own);fs.writeFileSync(path.join(own,'SKILL.md'),'own');fs.writeFileSync(path.join(own,'.santri-skills.json'),JSON.stringify({source:'fixture',installedAt:new Date().toISOString()}));const result=removeInstalled({kind:'skill',id:'own',skillsDir:dir,mcpFile:file});assert.equal(result.removed,true);assert.equal(fs.existsSync(own),false);fs.writeFileSync(file,JSON.stringify({mcpServers:{foreign:{command:'keep'},'santri-skills':{command:'npx',args:['-y','santriverse-skills','mcp-serve']}}}));removeInstalled({kind:'mcp',id:'santri-skills',skillsDir:dir,mcpFile:file});assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file)).mcpServers),['foreign']);assert.ok(fs.existsSync(file+'.bak'));assert.throws(()=>removeInstalled({kind:'mcp',id:'foreign',skillsDir:dir,mcpFile:file}),/milik|dikenal/)}finally{fs.rmSync(home,{recursive:true,force:true})}});
+
+test('skill proof: code from the santrihub-cek skill comes back through santrihub_verify',()=>fixture(async({home,base,post})=>{
+ const config=path.join(home,'.gemini','config','mcp_config.json'),skills=path.join(home,'.gemini','config','skills');fs.mkdirSync(path.dirname(config),{recursive:true});
+ fs.writeFileSync(config,JSON.stringify({mcpServers:{'santri-skills':{command:process.execPath,args:[path.resolve(__dirname,'../bin/cli.js'),'mcp-serve']}}}));
+ for(const id of ['alpha','beta']){fs.mkdirSync(path.join(skills,id),{recursive:true});fs.writeFileSync(path.join(skills,id,'SKILL.md'),`---\nname: ${id}\n---\n`)}
+ const started=await post('/api/verification/start',{scope:'global'});assert.equal(started.status,200);const body=await started.json();
+ assert.equal(body.skill,'santrihub-cek');assert.match(body.prompt,/santrihub-cek/);assert.doesNotMatch(JSON.stringify(body),/SH-[0-9A-F]{5}-/,'the code stays in the skill file');
+ const code=fs.readFileSync(path.join(skills,'santrihub-cek','SKILL.md'),'utf8').match(/"(SH-[0-9A-F]{5}-[0-9A-F]{5})"/)[1];
+ assert.ok(fs.existsSync(path.join(skills,'santrihub-cek','.santri-skills.json')),'check skill is SantriHub-managed');
+ const bridge=JSON.parse(fs.readFileSync(path.join(home,'bridge.json'),'utf8')),send=payload=>fetch(base+'/api/verification/bridge',{method:'POST',headers:{'content-type':'application/json','x-santrihub-bridge':bridge.token},body:JSON.stringify({challenge:bridge.challenge,...payload})});
+ assert.equal((await send({event:'verify',code:'SH-00000-00000',skills:['alpha']})).status,403);
+ let status=await(await fetch(base+'/api/verification/status')).json();assert.equal(status.skillProof,null);assert.equal(status.pending,true);
+ // A real MCP stdio process reads the bridge capability and forwards the code.
+ const child=spawn(process.execPath,[path.resolve(__dirname,'../bin/cli.js'),'mcp-serve'],{env:{...process.env,SANTRIHUB_BRIDGE_FILE:path.join(home,'bridge.json')},stdio:['pipe','pipe','pipe']});
+ try{
+  let out='';const replies=[];child.stdout.on('data',c=>{out+=c;let i;while((i=out.indexOf('\n'))!==-1){replies.push(JSON.parse(out.slice(0,i)));out=out.slice(i+1)}});
+  const reply=async id=>{for(let n=0;n<100;n++){const r=replies.find(x=>x.id===id);if(r)return r;await new Promise(r=>setTimeout(r,50))}throw new Error('no MCP reply '+id)};
+  child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'fixture',version:'1'}}})+'\n');await reply(1);
+  child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'santrihub_verify',arguments:{code:code.toLowerCase(),skills:['Alpha','santrihub-cek']}}})+'\n');
+  const text=(await reply(2)).result.content[0].text;assert.match(text,/Kode cocok/);assert.match(text,/1 dari 2/);assert.match(text,/beta/);
+ }finally{child.kill();child.stdin.end()}
+ status=await(await fetch(base+'/api/verification/status')).json();
+ assert.equal(status.verified,true);assert.equal(status.pending,false);assert.equal(status.skillProof.verified,true);assert.deepEqual(status.skillProof.seen,['alpha']);assert.deepEqual(status.skillProof.notSeen,['beta']);
+ assert.doesNotMatch(JSON.stringify(status),/token|challenge|SH-[0-9A-F]{5}-/);
+ assert.equal((await send({event:'verify',code,skills:[]})).status,409,'one code proves one session');
+}));

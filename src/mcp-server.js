@@ -1,7 +1,7 @@
 'use strict';
 
 // Minimal MCP stdio server (JSON-RPC 2.0, protocol negotiated from SUPPORTED_PROTOCOLS).
-// Tools: santrihub_status, list_skills, get_skill, get_skill_file, search_docs. No dashboard heartbeat or fake connection marker.
+// Tools: santrihub_status, santrihub_verify, list_skills, get_skill, get_skill_file, search_docs. No dashboard heartbeat or fake connection marker.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -13,13 +13,26 @@ const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 let protocol = SUPPORTED_PROTOCOLS[0];
 const MAX_SKILL_FILE_BYTES = 512 * 1024;
 const pkg = require('../package.json');
-const {report}=require('./verification-bridge');
+const {report,verify}=require('./verification-bridge');
 
 const TOOLS = [
   {
     name: 'santrihub_status',
     description: 'Bukti read-only bahwa runtime MCP santri-skills ini benar-benar dimuat klien: identitas server, versi, protocol, executable Node, dan root instalasi. Tidak membaca config atau secret.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'santrihub_verify',
+    description: 'Kirim kode cek dari skill santrihub-cek ke SantriHub, beserta daftar skill yang kamu lihat, untuk membuktikan skill benar-benar dimuat. Pakai hanya saat skill santrihub-cek memintanya.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'kode dari skill santrihub-cek, contoh: SH-1A2B3-C4D5E' },
+        skills: { type: 'array', items: { type: 'string' }, description: 'nama (id) semua skill yang tersedia untukmu di sesi ini' },
+      },
+      required: ['code'],
+      additionalProperties: false,
+    },
   },
   {
     name: 'list_skills',
@@ -128,6 +141,12 @@ async function callTool(name, args = {}) {
       toolNames: TOOLS.map((t) => t.name), skillCacheRoot: CACHE_ROOT, cacheExists: fs.existsSync(CACHE_ROOT),
       note: 'Proses bridge MCP aktif. Identitas IDE tidak diautentikasi; clientInfo bukan bukti identitas. Status tidak membuktikan MCP lain atau skill dimuat IDE.',
     }, null, 2);
+  }
+  if (name === 'santrihub_verify') {
+    const { status, data } = await verify(args.code, args.skills);
+    if (status === 200) return `Kode cocok. SantriHub mencatat: skill dimuat dan MCP santri-skills tersambung. ${data.seen} dari ${data.total} skill terpasang disebut.${data.notSeen?.length ? ' Tidak disebut: ' + data.notSeen.join(', ') + '.' : ''} Lihat hasil lengkap di SantriHub → Cek & Tes.`;
+    if (status === 0) return 'SantriHub tidak menerima kode: tidak ada cek aktif. Buka SantriHub → Cek & Tes → Siapkan kode cek, lalu coba lagi.';
+    return 'SantriHub menolak kode: ' + (data.error || 'status ' + status) + '.';
   }
   const groups = await catalog();
   if (name === 'list_skills') {

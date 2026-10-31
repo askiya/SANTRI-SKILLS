@@ -117,9 +117,22 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
     try{fs.writeFileSync(tmp,JSON.stringify(rows),{flag:'wx',mode:0o600});fs.renameSync(tmp,reposFile)}finally{fs.rmSync(tmp,{force:true})}
   }
   let verification=null;
+  // Skill proof: a managed skill "santrihub-cek" holds a code that exists nowhere else. An agent that
+  // sends it back through santrihub_verify has read that SKILL.md in its current session.
+  const CHECK_SKILL='santrihub-cek',CHECK_PROMPT='Gunakan skill santrihub-cek untuk mengecek SantriHub.';
+  const checkSkillMd=(code,expires)=>['---','name: '+CHECK_SKILL,'description: Cek SantriHub. Pakai skill ini hanya saat pengguna meminta cek SantriHub atau menyebut santrihub-cek.','---','','# Cek SantriHub','','1. Panggil tool MCP `santrihub_verify` dari server `santri-skills` dengan:','   - `code`: "'+code+'"','   - `skills`: daftar nama (id) semua skill yang tersedia untukmu di sesi ini, termasuk santrihub-cek.','2. Sampaikan jawaban tool itu apa adanya kepada pengguna.','','Kode ini dibuat SantriHub untuk satu kali cek dan berlaku sampai '+new Date(expires).toLocaleTimeString('id-ID')+'.',''].join('\n');
+  function writeCheckSkill(dir,code,expires){
+    const dest=path.join(dir,CHECK_SKILL),marker=path.join(dest,'.santri-skills.json');assertNoLinks(dest);
+    if(fs.existsSync(dest)&&!fs.existsSync(marker))throw new AuthError(409,'Folder skill santrihub-cek sudah ada dan bukan buatan SantriHub. Ganti namanya dulu.');
+    fs.mkdirSync(dest,{recursive:true});fs.writeFileSync(path.join(dest,'SKILL.md'),checkSkillMd(code,expires));
+    fs.writeFileSync(marker,JSON.stringify({source:CHECK_SKILL,installedAt:new Date().toISOString()},null,2));
+  }
+  // Compares the skills found on disk at start with the names the agent reported.
+  const skillProof=()=>{const p=verification&&verification.skillProof;if(!p)return null;const said=new Set(p.reported);
+    return {verified:true,observedAt:p.observedAt,skill:CHECK_SKILL,seen:verification.skillsAtStart.filter(id=>said.has(id.toLowerCase())),notSeen:verification.skillsAtStart.filter(id=>!said.has(id.toLowerCase())),reportedCount:p.reported.length};};
   const clearVerification=()=>{verification=null;assertNoLinks(capabilityFile);fs.rmSync(capabilityFile,{force:true});};
   const binding=()=>{const t=resolveTargets('global',targetOptions());const hash=crypto.createHash('sha256').update(JSON.stringify(t));for(const file of [t.mcpFile,...t.skillsDirs.flatMap(dir=>fs.existsSync(dir)?fs.readdirSync(dir).map(id=>path.join(dir,id,'SKILL.md')):[])]){assertNoLinks(file);hash.update(file);if(fs.existsSync(file)&&fs.statSync(file).isFile())hash.update(fs.readFileSync(file));}return hash.digest('hex');};
-  const evidence=()=>{if(verification&&(verification.expires<=Date.now()||verification.binding!==binding()))clearVerification();return {verified:Boolean(verification&&verification.evidence),pending:Boolean(verification&&!verification.evidence),expiresAt:verification?verification.expires:null,evidence:verification?verification.evidence:null,note:'Bukti hanya bridge santri-skills. MCP lain belum diketahui; file Skills bukan bukti dimuat IDE. Identitas IDE tidak diautentikasi.'};};
+  const evidence=()=>{if(verification&&(verification.expires<=Date.now()||verification.binding!==binding()))clearVerification();return {verified:Boolean(verification&&verification.evidence),pending:Boolean(verification&&!(verification.evidence&&verification.skillProof)),expiresAt:verification?verification.expires:null,evidence:verification?verification.evidence:null,skillProof:skillProof(),prompt:verification?CHECK_PROMPT:null,note:'Bukti hanya bridge santri-skills. MCP lain belum diketahui; file Skills bukan bukti dimuat IDE. Identitas IDE tidak diautentikasi.'};};
   const csrfTokens = new Map();
   let busy = false;
   const libRoot = library.libraryRoot(home || os.homedir());
@@ -211,9 +224,19 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         await session.requirePremium();
         if(req.socket.remoteAddress!=='127.0.0.1')throw new AuthError(403,'Callback hanya loopback.');
         if(req.headers.origin||req.headers['content-type']!=='application/json')throw new AuthError(403,'Callback ditolak.');
-        let raw='';for await(const c of req){raw+=c;if(Buffer.byteLength(raw)>1024)throw new AuthError(400,'Callback terlalu besar.');}
+        let raw='';for await(const c of req){raw+=c;if(Buffer.byteLength(raw)>32*1024)throw new AuthError(400,'Callback terlalu besar.');}
         const body=JSON.parse(raw),token=req.headers['x-santrihub-bridge'];evidence();
-        if(!verification||typeof token!=='string'||token.length!==64||!crypto.timingSafeEqual(Buffer.from(token),Buffer.from(verification.token))||body.challenge!==verification.challenge||!['initialize','tool'].includes(body.event))throw new AuthError(403,'Callback invalid atau kedaluwarsa.');
+        if(!verification||typeof token!=='string'||token.length!==64||!crypto.timingSafeEqual(Buffer.from(token),Buffer.from(verification.token))||body.challenge!==verification.challenge||!['initialize','tool','verify'].includes(body.event))throw new AuthError(403,'Callback invalid atau kedaluwarsa.');
+        if(body.event==='verify'){
+          if(verification.skillProof)throw new AuthError(409,'Kode cek sudah dipakai. Buat kode baru di SantriHub.');
+          const code=typeof body.code==='string'?body.code.trim().toUpperCase():'';
+          if(code.length!==verification.code.length||!crypto.timingSafeEqual(Buffer.from(code),Buffer.from(verification.code)))throw new AuthError(403,'Kode cek tidak cocok. Buat kode baru di SantriHub, muat ulang agent, lalu coba lagi.');
+          const reported=Array.isArray(body.skills)?[...new Set(body.skills.filter(s=>typeof s==='string').map(s=>s.trim().toLowerCase().slice(0,160)).filter(Boolean))].slice(0,500):[];
+          verification.skillProof={observedAt:new Date().toISOString(),reported};
+          if(!verification.evidence)verification.evidence={server:'santri-skills',level:'bridge-mcp-loaded',source:'local-capability-callback',event:'verify',observedAt:new Date().toISOString(),identityAuthenticated:false};
+          const p=skillProof();
+          return send(200,{accepted:true,seen:p.seen.length,total:verification.skillsAtStart.length,notSeen:p.notSeen.slice(0,20)});
+        }
         if(verification.evidence)throw new AuthError(409,'Callback sudah dipakai.');
         verification.evidence={server:'santri-skills',level:'bridge-mcp-loaded',source:'local-capability-callback',event:body.event,observedAt:new Date().toISOString(),identityAuthenticated:false};
         return send(200,{accepted:true});
@@ -343,9 +366,12 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         if(req.url==='/api/uninstall'){if(input.confirm!==true||input.confirmGlobal!==true)throw new AuthError(400,'Konfirmasi uninstall global wajib.');const target=resolveForWrite('global',{...targetOptions(),kind:input.kind==='skill'?'skills':'mcp'});const result=removeInstalled({kind:input.kind,id:input.id,skillsDir:target.skillsDirs[0],mcpFile:target.mcpFile});clearVerification();return send(200,result);}
         clearVerification();const target=resolveTargets('global',targetOptions());const status=configStatus('global',cwd,home,{skillTargets:target.skillsDirs,mcpFile:target.mcpFile});
         if(!status.mcp.servers.some(s=>s.name==='santri-skills'&&s.managed))throw new AuthError(409,'Pasang bridge MCP santri-skills resmi sebelum verifikasi callback.');
-        const challenge=crypto.randomBytes(32).toString('hex');verification={challenge,token:crypto.randomBytes(32).toString('hex'),binding:binding(),expires:Date.now()+300000,evidence:null};
+        const expires=Date.now()+600000,code='SH-'+crypto.randomBytes(5).toString('hex').toUpperCase().replace(/^(.{5})/,'$1-');
+        writeCheckSkill(resolveForWrite('global',{...targetOptions(),kind:'skills'}).skillsDirs[0],code,expires);
+        const skillsAtStart=[...new Set(status.skills.map(s=>s.id).filter(id=>id&&id!==CHECK_SKILL))];
+        const challenge=crypto.randomBytes(32).toString('hex');verification={challenge,token:crypto.randomBytes(32).toString('hex'),binding:binding(),expires,evidence:null,code,skillsAtStart,skillProof:null};
         assertNoLinks(capabilityFile);fs.mkdirSync(path.dirname(capabilityFile),{recursive:true,mode:0o700});fs.writeFileSync(capabilityFile,JSON.stringify({port,token:verification.token,challenge,expires:verification.expires}),{flag:'wx',mode:0o600});
-        return send(200,{challenge,expiresAt:verification.expires,prompt:'Panggil tool santrihub_status dari MCP santri-skills. Jawaban asli saja.',note:'Bridge loaded saja; bukan bukti semua MCP atau Skills dimuat IDE.'});
+        return send(200,{challenge,expiresAt:verification.expires,skill:CHECK_SKILL,prompt:CHECK_PROMPT,note:'Kode cek ada di skill santrihub-cek. Restart Antigravity, buka chat Agent baru, lalu tempel prompt. Callback MCP saja hanya membuktikan bridge santri-skills.'});
       }
       if (input.scope === 'global' && req.url !== '/api/verify' && !req.url.endsWith('/preview') && input.confirmGlobal !== true) throw new AuthError(400, 'Konfirmasi global wajib.');
 

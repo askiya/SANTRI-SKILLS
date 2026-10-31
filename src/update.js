@@ -68,9 +68,14 @@ function sumFor(sums, file) {
   return null;
 }
 
-/** Downloads the installer of `tag` into `dir` and returns its path once the hash matches. */
-async function downloadInstaller(tag, dir, { fetchImpl = globalThis.fetch } = {}) {
+/**
+ * Downloads the installer of `tag` into `dir` and returns its path once the hash matches.
+ * onProgress gets {stage:'sums'}, then {stage:'download', received, total} per chunk (total 0
+ * when the server sends no length), then {stage:'verify'}.
+ */
+async function downloadInstaller(tag, dir, { fetchImpl = globalThis.fetch, onProgress = () => {} } = {}) {
   if (!TAG_RE.test(tag)) throw new Error('Versi rilis tidak valid.');
+  onProgress({ stage: 'sums' });
   const base = `${RELEASES}/download/${tag}`;
   const get = async (url, what) => {
     const res = await fetchImpl(url, { headers: { 'User-Agent': 'SantriHub' }, signal: AbortSignal.timeout(10 * 60 * 1000) });
@@ -82,9 +87,20 @@ async function downloadInstaller(tag, dir, { fetchImpl = globalThis.fetch } = {}
   const res = await get(`${base}/${INSTALLER}`, 'installer');
   const size = Number(res.headers.get('content-length') || 0);
   if (size > MAX_INSTALLER) throw new Error('Ukuran installer tidak wajar.');
-  const data = Buffer.from(await res.arrayBuffer());
-  if (data.length > MAX_INSTALLER) throw new Error('Ukuran installer tidak wajar.');
-  const actual = crypto.createHash('sha256').update(data).digest('hex');
+  const hash = crypto.createHash('sha256');
+  const chunks = [];
+  let received = 0;
+  onProgress({ stage: 'download', received, total: size });
+  for await (const chunk of res.body || []) {
+    received += chunk.length;
+    if (received > MAX_INSTALLER) throw new Error('Ukuran installer tidak wajar.');
+    hash.update(chunk);
+    chunks.push(chunk);
+    onProgress({ stage: 'download', received, total: size });
+  }
+  onProgress({ stage: 'verify' });
+  const data = Buffer.concat(chunks);
+  const actual = hash.digest('hex');
   if (actual !== expected) throw new Error('Checksum installer tidak cocok. Pembaruan dibatalkan.');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `SantriHub-Setup-${tag}.exe`);

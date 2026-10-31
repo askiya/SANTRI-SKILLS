@@ -200,7 +200,7 @@ const CALLBACK_PAGE = `<!doctype html><html lang="id"><head><meta charset="utf-8
  * Wrap the dashboard's request handler with the app-mode login routes.
  * Every other request (and all premium checks) still goes to the dashboard.
  */
-function attachBrowserLogin(server, { focus = () => {}, open = openExternal, update = null } = {}) {
+function attachBrowserLogin(server, { focus = () => {}, open = openExternal, update = null, updateStatus = () => ({ stage: 'idle' }) } = {}) {
   // The dashboard offers "Update sekarang" only when this app can replace itself.
   const appScript = update ? `${APP_SCRIPT}\ndocument.documentElement.dataset.santrihubUpdate = 'self';\n` : APP_SCRIPT;
   const dashboard = server.listeners('request');
@@ -219,6 +219,8 @@ function attachBrowserLogin(server, { focus = () => {}, open = openExternal, upd
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'" });
       return res.end(CALLBACK_PAGE);
     }
+    // Polled by the update dialog while the POST below is still running.
+    if (req.method === 'GET' && pathname === '/__santrihub/update/status') return json(200, updateStatus());
     if (req.method === 'POST' && pathname === '/__santrihub/update') {
       if (!sameOriginJson()) return json(403, { error: 'Ditolak.' });
       req.resume();
@@ -394,23 +396,29 @@ function startDesktop({ version = '' } = {}) {
   // Self-update only for the installed app (not `node bin/cli.js app` or npx).
   const checkUpdate = createUpdateChecker({ current: version });
   let updating = false;
+  let updateProgress = { stage: 'idle' };
   const update = installed ? async () => {
     if (updating) throw Object.assign(new Error('Pembaruan sedang berjalan.'), { status: 409 });
+    updateProgress = { stage: 'check' };
     const info = await checkUpdate();
-    if (!info.available) throw Object.assign(new Error('SantriHub sudah versi terbaru.'), { status: 409 });
+    if (!info.available) { updateProgress = { stage: 'idle' }; throw Object.assign(new Error('SantriHub sudah versi terbaru.'), { status: 409 }); }
     updating = true;
     try {
-      const installer = await downloadInstaller(`v${info.latest}`, path.join(data, 'updates'));
+      const onProgress = (p) => { updateProgress = { ...p, version: info.latest }; };
+      const installer = await downloadInstaller(`v${info.latest}`, path.join(data, 'updates'), { onProgress });
+      updateProgress = { stage: 'install', version: info.latest };
       startUpdateRunner({ installer, exe: process.execPath, args: [CLI, 'app'], pid: process.pid, profile, browserProcess: browser?.process, log: path.join(data, 'santrihub.log') });
       log(`update ${version} -> ${info.latest}`);
-      setTimeout(close, 1500).unref?.(); // let the dashboard show the confirmation first
+      updateProgress = { stage: 'restart', version: info.latest };
+      setTimeout(close, 2500).unref?.(); // let the dashboard show the last step first
       return { version: info.latest };
     } catch (error) {
       updating = false;
+      updateProgress = { stage: 'error', error: error?.message || 'Pembaruan gagal.' };
       throw error;
     }
   } : null;
-  attachBrowserLogin(server, { focus: () => (browser ? focusWindow(profile, browser.process) : undefined), update });
+  attachBrowserLogin(server, { focus: () => (browser ? focusWindow(profile, browser.process) : undefined), update, updateStatus: () => updateProgress });
 
   let idleArmed = false;
   const armIdleShutdown = (reason) => {
