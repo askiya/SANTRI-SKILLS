@@ -1,9 +1,10 @@
 // extension/chatgpt-adapter.js – ChatGPT Plugins integration for the side panel.
 //
 // Assisted install: the extension builds a ChatGPT plugin ZIP from the verified
-// package, opens chatgpt.com/plugins and uses ChatGPT's own "Upload plugin"
-// dialog; the member then presses "Install plugin" in ChatGPT. If any step
-// fails, the panel offers the plugin ZIP and these manual steps instead.
+// package, opens chatgpt.com/plugins and fills ChatGPT's own "Add → Upload
+// plugin archive" dialog; the member then presses "Add plugin" and "Install
+// plugin" in ChatGPT. If any step fails, the panel offers the plugin ZIP and
+// these manual steps instead.
 
 const CHATGPT_PLUGINS_URL = 'https://chatgpt.com/plugins';
 
@@ -11,8 +12,8 @@ function getChatGptManualSteps() {
   return [
     'Download plugin ChatGPT (klik "Download ZIP ChatGPT"). Tidak perlu diekstrak.',
     'Buka chatgpt.com/plugins (klik "Buka ChatGPT Plugins").',
-    'Klik tombol + lalu pilih "Unggah plugin", pilih file ZIP tadi.',
-    'Setelah "Impor berhasil", klik "Lihat Plugin" lalu "Instal Plugin".',
+    'Klik "Add" (pojok kanan atas) lalu "Upload plugin archive", pilih file ZIP tadi, lalu klik "Add plugin".',
+    'Buka plugin yang baru ditambahkan, lalu klik "Install plugin" bila ditawarkan.',
     'Pakai di chat dengan mengetik @ lalu nama plugin.',
   ];
 }
@@ -62,17 +63,31 @@ async function assistChatGptInstall(plugin) {
   return { ...reply, tabId: tab.id };
 }
 
-/** Wait until the member pressed "Install plugin" on the plugin page. */
-async function waitUntilChatGptInstalled(tabId, pluginId, { timeoutMs = 5 * 60 * 1000 } = {}) {
+/**
+ * Wait until the member installed the plugin. With a known pluginId (old
+ * dialogs import on file choice) only that page counts; otherwise the member
+ * first presses "Add plugin" and the plugin page whose title matches counts.
+ * Resolves with the pluginId, or null on timeout.
+ */
+async function waitUntilChatGptInstalled(tabId, pluginId, { title = '', timeoutMs = 5 * 60 * 1000 } = {}) {
+  const want = String(title).trim().toLowerCase();
   const end = Date.now() + timeoutMs;
+  let known = null; // plugins already in the Installed row before the member pressed "Add plugin"
   while (Date.now() < end) {
     try {
-      const state = await chrome.tabs.sendMessage(tabId, { type: 'chatgpt:state' });
-      if (state?.pluginId === pluginId && state.installOffered === false) return true;
+      const state = await chrome.tabs.sendMessage(tabId, { type: 'chatgpt:state', follow: !pluginId });
+      const matches = pluginId ? state?.pluginId === pluginId
+        : !!state?.pluginId && (!want || state.title.trim().toLowerCase() === want);
+      if (matches && state.title && state.installOffered === false) return state.pluginId;
+      if (!pluginId && state?.onPluginsPage) {
+        if (!known) known = new Set((state.tiles || []).map(t => t.pluginId));
+        const added = (state.tiles || []).find(t => !known.has(t.pluginId) && (!want || t.title.toLowerCase() === want));
+        if (added) return added.pluginId;
+      }
     } catch { /* tab navigating or closed */ }
     await new Promise(r => setTimeout(r, 2500));
   }
-  return false;
+  return null;
 }
 
 async function openChatGptPluginsPage() {

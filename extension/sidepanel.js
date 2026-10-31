@@ -270,7 +270,7 @@
       if (target === 'chatgpt') {
         const { plugin } = await chatGptPluginFrom(blob, item);
         saveBytes(plugin.zip, plugin.fileName);
-        showNotice('Plugin ChatGPT terunduh. Upload di chatgpt.com/plugins → + → Unggah plugin.', 'good');
+        showNotice('Plugin ChatGPT terunduh. Upload di chatgpt.com/plugins → Add → Upload plugin archive → Add plugin.', 'good');
       } else if (target === 'claude') {
         const pkg = buildClaudeZip(prepareSkillPackage(await readZip(await blob.arrayBuffer())), item);
         saveBytes(pkg.zip, pkg.fileName);
@@ -308,18 +308,19 @@
     },
     chatgpt: {
       eyebrow: 'PASANG KE CHATGPT',
-      steps: ['Cek akses Premium', 'Unduh & verifikasi paket', 'Bungkus jadi plugin ChatGPT', 'Buka ChatGPT Plugins', 'Unggah plugin ke ChatGPT', 'Klik Instal Plugin di ChatGPT'],
+      steps: ['Cek akses Premium', 'Unduh & verifikasi paket', 'Bungkus jadi plugin ChatGPT', 'Buka ChatGPT Plugins', 'Isi form upload ChatGPT', 'Klik Add plugin & Install di ChatGPT'],
       failReasons: {
         navigate: 'Halaman ChatGPT Plugins tidak terbuka.',
-        add_button: 'Tombol + di halaman Plugin tidak ditemukan. Pastikan sudah login di chatgpt.com.',
-        upload_menu: 'Menu "Unggah plugin" tidak muncul (akun mungkin belum mendapat fitur upload plugin).',
+        add_button: 'Tombol "Add" di halaman Plugins tidak ditemukan. Pastikan sudah login di chatgpt.com.',
+        upload_menu: 'Menu "Upload plugin archive" tidak muncul (akun mungkin belum mendapat fitur upload plugin).',
         upload_dialog: 'Dialog unggah plugin tidak terbuka.',
         import_failed: 'ChatGPT menolak plugin.',
-        import_timeout: 'ChatGPT belum menyelesaikan impor.',
+        import_timeout: 'Tombol "Add plugin" ChatGPT belum aktif setelah file dimasukkan.',
       },
       waitTitle: 'Tinggal satu klik',
-      waitHint: 'Plugin sudah diimpor. Klik "Instal Plugin" di tab ChatGPT — panel ini mendeteksi otomatis.',
-      pendingHint: 'Belum terdeteksi terpasang. Kalau sudah klik "Instal Plugin", tekan ↻ di katalog.',
+      waitHint: 'ZIP sudah masuk ke form ChatGPT. Klik "Add plugin" di tab ChatGPT, buka plugin-nya, lalu klik "Install plugin" bila ditawarkan. Panel ini mendeteksi otomatis.',
+      importedHint: 'Plugin sudah diimpor. Klik "Install plugin" di tab ChatGPT — panel ini mendeteksi otomatis.',
+      pendingHint: 'Belum terdeteksi terpasang. Kalau sudah klik "Add plugin" dan "Install plugin", buka halaman plugin-nya di ChatGPT lalu tekan ↻ di katalog.',
       doneTitle: 'Terpasang di ChatGPT ✓',
       doneHint: (_name, title) => `Pakai di chat ChatGPT dengan mengetik @ lalu pilih "${title}".`,
     },
@@ -431,8 +432,9 @@
 
       step(5, 'active');
       $('#install-title').textContent = cfg.waitTitle;
-      setHint(cfg.waitHint + skippedNote, 'info');
-      const installed = target === 'chatgpt' ? await waitUntilChatGptInstalled(result.tabId, result.pluginId)
+      setHint((result.stage === 'imported' && cfg.importedHint || cfg.waitHint) + skippedNote, 'info');
+      const pluginTitle = plugin?.manifest?.extensions?.['com.openai']?.interface?.displayName || item.title;
+      const installed = target === 'chatgpt' ? await waitUntilChatGptInstalled(result.tabId, result.pluginId || null, { title: pluginTitle })
         : target === 'claude' ? await waitUntilClaudeInstalled(result.tabId, skill.name)
           : await waitUntilListed(result.tabId, skill.name);
       if (!installed) {
@@ -442,9 +444,9 @@
         return;
       }
       step(5, 'done');
-      await writeStatus(item.id, { name: skill.name, version: item.version, status: 'detected', pluginId: result.pluginId || null }, target);
+      await writeStatus(item.id, { name: skill.name, version: item.version, status: 'detected', pluginId: target === 'chatgpt' ? installed : null }, target);
       $('#install-title').textContent = cfg.doneTitle;
-      setHint(cfg.doneHint(skill.name, plugin?.manifest?.extensions?.['com.openai']?.interface?.displayName || item.title), 'good');
+      setHint(cfg.doneHint(skill.name, pluginTitle), 'good');
       renderCatalog();
     } finally {
       installing = false;
@@ -475,7 +477,7 @@
           chrome.tabs.create({ url: `https://chatgpt.com/plugins/${encodeURIComponent(known.pluginId)}` });
           if (known.version === item.version) return showNotice('Plugin sudah terpasang di ChatGPT — membuka halamannya.', 'good');
           await downloadItem(item, btn, 'chatgpt');
-          return showNotice(`Versi ${item.version} siap. Di halaman plugin: Tindakan plugin → Unggah versi baru → pilih ZIP yang baru diunduh.`, 'warn');
+          return showNotice(`Versi ${item.version} siap. Di halaman plugin: Manage / More actions → upload versi baru → pilih ZIP yang baru diunduh.`, 'warn');
         }
       }
       installItem(item, { install: 'gemini', 'install-chatgpt': 'chatgpt', 'install-claude': 'claude' }[action]);
@@ -498,7 +500,7 @@
     },
     chatgpt: {
       title: 'Pasang di ChatGPT', download: 'Download ZIP ChatGPT', open: 'Buka ChatGPT Plugins',
-      honesty: 'ChatGPT menerima ZIP plugin langsung. Konfirmasi akhir (klik Instal Plugin) selalu dilakukan member di ChatGPT.',
+      honesty: 'ChatGPT menerima ZIP plugin langsung. Konfirmasi akhir (klik Add plugin dan Install plugin) selalu dilakukan member di ChatGPT.',
     },
     claude: {
       title: 'Pasang di Claude', download: 'Download ZIP Claude', open: 'Buka Claude Skills',

@@ -74,13 +74,13 @@ ChatGPT menggantikan Custom GPT dengan **Plugins** (Custom GPT pensiun 11 Desemb
 2. `chatgpt-plugin.js` membungkus skill menjadi plugin portable (di memori, tanpa library):
    `plugin.json` (Agent Plugins schema + `extensions.com.openai.interface`: nama, deskripsi, Santriverse, logo) · `skills/<nama>/SKILL.md` · `skills/<nama>/references/…` · `assets/logo.png`.
 3. Panel membuka/memakai tab `chatgpt.com/plugins` (tab chat tidak pernah diambil alih).
-4. `chatgpt-plugins.js` (content script) membuka **+ → Unggah plugin**, mengisi ZIP ke form upload milik ChatGPT, menunggu **Impor berhasil**, lalu membuka halaman plugin.
-5. **Member yang menekan “Instal Plugin”** — extension tidak pernah menekannya. Status **Terpasang di ChatGPT** muncul setelah ChatGPT tidak lagi menawarkan tombol instal.
+4. `chatgpt-plugins.js` (content script) membuka **Add → Upload plugin archive** (menu ber-`aria-haspopup`, terverifikasi 31 Okt 2026), mengisi ZIP ke dialog **New Plugin**, lalu berhenti saat tombol **Add plugin** aktif. Teks statis dialog tidak dianggap error; hanya baris baru setelah file dipilih. Dialog lama yang langsung mengimpor (**Impor berhasil → Lihat Plugin**) tetap diikuti.
+5. **Member yang menekan “Add plugin” lalu “Install plugin”** — extension tidak pernah menekannya. Panel mencatat ID plugin dari halaman plugin, atau dari ikon baru berjudul sama di baris **Installed** (ikon yang sudah ada sebelumnya diabaikan).
 6. Pakai di chat biasa dengan `@Nama Plugin` (teruji di akun Free; file referensi terbaca).
 
 Plugin pribadi hasil upload belum bisa dihapus dari ChatGPT, jadi extension tidak pernah mengunggah duplikat: versi sama → membuka halaman plugin; versi baru → menyiapkan ZIP dan memandu ke **Tindakan plugin → Unggah versi baru**.
 
-Fallback manual: **Download ZIP ChatGPT** → chatgpt.com/plugins → + → Unggah plugin → Lihat Plugin → Instal Plugin.
+Fallback manual: **Download ZIP ChatGPT** → chatgpt.com/plugins → Add → Upload plugin archive → pilih ZIP → Add plugin → Install plugin.
 
 ## Test
 
