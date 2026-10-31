@@ -25,7 +25,7 @@ Update berikutnya: naikkan `version` di `extension/manifest.json`, build ulang Z
 | Kolom | Isi |
 | --- | --- |
 | Nama | Santri Skills (dari manifest) |
-| Ringkasan (≤132 karakter) | Pasang Santriverse Skills ke Google Gemini dan ChatGPT dalam 2 klik (khusus Member Premium). (dari manifest) |
+| Ringkasan (≤132 karakter) | Pasang Santriverse Skills ke Google Gemini, ChatGPT, dan Claude (khusus Member Premium). (dari manifest) |
 | Kategori | Productivity → Tools |
 | Bahasa | Indonesian (bahasa utama); tambahkan English memakai deskripsi EN |
 | Ikon | `extension/icons/icon-128.png` (sudah di dalam paket) |
@@ -37,19 +37,20 @@ Update berikutnya: naikkan `version` di `extension/manifest.json`, build ulang Z
 ### Deskripsi (Indonesian)
 
 ```text
-Santri Skills adalah pendamping resmi Santriverse untuk memasang Skill premium ke Google Gemini dan ChatGPT tanpa ribet download, ekstrak, dan upload manual.
+Santri Skills adalah pendamping resmi Santriverse untuk memasang Skill premium ke Google Gemini, ChatGPT, dan Claude tanpa ribet download, ekstrak, dan upload manual.
 
 CARA KERJA
 1. Hubungkan akun Santriverse. Login terjadi di situs resmi santriverse.my.id — password tidak pernah diketik di extension.
-2. Buka katalog Skill di side panel.
-3. Klik "Pasang ke Gemini" atau "Pasang ke ChatGPT".
+2. Buka katalog Skill di side panel dan pilih tab Gemini, ChatGPT, atau Claude.
+3. Klik tombol pasang di kartu Skill.
    • Gemini: paket disiapkan dan form upload Gemini Skills terisi otomatis. Kamu tinggal review lalu klik Buat.
    • ChatGPT: paket dibungkus menjadi plugin ChatGPT dan diunggah lewat menu "Unggah plugin". Kamu tinggal klik Instal Plugin.
-4. Status "Terpasang" terdeteksi otomatis dari halaman Gemini/ChatGPT.
+   • Claude: paket disiapkan dalam format Skill Claude dan dimasukkan ke form "Upload skill". Kamu tinggal klik Upload.
+4. Status "Terpasang" terdeteksi otomatis dari halaman Gemini/ChatGPT/Claude.
 
 FITUR
 • Katalog Skill premium Santriverse dalam satu panel
-• Pemasangan berbantu ke Gemini Skills dan ChatGPT Plugins
+• Pemasangan berbantu ke Gemini Skills, ChatGPT Plugins, dan Claude Skills
 • Setiap paket diverifikasi ukuran dan SHA-256 sebelum dipakai
 • Download ZIP manual tetap tersedia sebagai cadangan
 • Tema terang/gelap
@@ -58,28 +59,29 @@ KHUSUS MEMBER PREMIUM
 Akses katalog dan unduhan diverifikasi oleh server Santriverse. Akun non-Premium akan diarahkan ke halaman upgrade.
 
 PRIVASI
-Extension hanya bekerja saat kamu menekan tombolnya, tidak membaca isi percakapan, tidak memakai iklan atau pelacak, dan tidak menjual data. Konfirmasi akhir (Buat / Instal Plugin) selalu kamu yang menekan.
+Extension hanya bekerja saat kamu menekan tombolnya, tidak membaca isi percakapan, tidak memakai iklan atau pelacak, dan tidak menjual data. Konfirmasi akhir (Buat / Instal Plugin / Upload) selalu kamu yang menekan.
 Kebijakan privasi: https://santriverse.my.id/docs/santri-skills-privacy
 
-Santri Skills dibuat oleh Santriverse dan tidak berafiliasi dengan Google maupun OpenAI.
+Santri Skills dibuat oleh Santriverse dan tidak berafiliasi dengan Google, OpenAI, maupun Anthropic.
 ```
 
 ### Description (English)
 
 ```text
-Santri Skills is the official Santriverse companion for installing premium Skills into Google Gemini and ChatGPT — no manual downloading, unzipping, or uploading.
+Santri Skills is the official Santriverse companion for installing premium Skills into Google Gemini, ChatGPT, and Claude — no manual downloading, unzipping, or uploading.
 
 HOW IT WORKS
 1. Connect your Santriverse account. Sign-in happens on the official santriverse.my.id site; your password is never typed into the extension.
-2. Browse the Skill catalog in the side panel.
-3. Click "Install to Gemini" or "Install to ChatGPT".
+2. Browse the Skill catalog in the side panel and pick the Gemini, ChatGPT, or Claude tab.
+3. Click the install button on a Skill card.
    • Gemini: the package is prepared and Gemini's Skills upload form is filled for you. Review it and click Create.
    • ChatGPT: the package is wrapped as a ChatGPT plugin and uploaded through "Upload plugin". Click Install plugin to finish.
-4. The "Installed" status is detected automatically from the Gemini/ChatGPT page.
+   • Claude: the package is prepared as a Claude Skill and placed in Claude's "Upload skill" form. Click Upload to finish.
+4. The "Installed" status is detected automatically from the Gemini/ChatGPT/Claude page.
 
 FEATURES
 • Santriverse premium Skill catalog in one panel
-• Assisted install to Gemini Skills and ChatGPT Plugins
+• Assisted install to Gemini Skills, ChatGPT Plugins, and Claude Skills
 • Every package is verified by size and SHA-256 before use
 • Manual ZIP download as a fallback
 • Light/dark theme
@@ -88,10 +90,10 @@ PREMIUM MEMBERS ONLY
 Catalog and download access is verified by the Santriverse server. Non-Premium accounts are pointed to the upgrade page.
 
 PRIVACY
-The extension acts only when you press its buttons, never reads your conversations, has no ads or trackers, and never sells data. The final confirmation (Create / Install plugin) is always yours.
+The extension acts only when you press its buttons, never reads your conversations, has no ads or trackers, and never sells data. The final confirmation (Create / Install plugin / Upload) is always yours.
 Privacy policy: https://santriverse.my.id/docs/santri-skills-privacy
 
-Santri Skills is made by Santriverse and is not affiliated with Google or OpenAI.
+Santri Skills is made by Santriverse and is not affiliated with Google, OpenAI, or Anthropic.
 ```
 
 ## Privacy
@@ -99,20 +101,21 @@ Santri Skills is made by Santriverse and is not affiliated with Google or OpenAI
 ### Single purpose
 
 ```text
-Install the user's Santriverse premium Skills into Google Gemini Skills and ChatGPT Plugins from a side panel catalog, after verifying the user's Santriverse Premium membership.
+Install the user's Santriverse premium Skills into Google Gemini Skills, ChatGPT Plugins, and Claude Skills from a side panel catalog, after verifying the user's Santriverse Premium membership.
 ```
 
 ### Permission justification
 
 | Izin | Justifikasi (salin) |
 | --- | --- |
-| `sidePanel` | The extension's whole interface (sign-in, Skill catalog, install progress) lives in Chrome's side panel so it stays open next to the Gemini or ChatGPT tab during an install. |
-| `storage` | Keeps the short-lived Santriverse session token in chrome.storage.session (cleared when the browser closes) and the per-Skill install status (Gemini/ChatGPT) in chrome.storage.local. No browsing data is stored. |
+| `sidePanel` | The extension's whole interface (sign-in, Skill catalog, install progress) lives in Chrome's side panel so it stays open next to the Gemini, ChatGPT, or Claude tab during an install. |
+| `storage` | Keeps the short-lived Santriverse session token in chrome.storage.session (cleared when the browser closes) and the per-Skill install status (Gemini/ChatGPT/Claude) plus the last selected platform tab in chrome.storage.local and localStorage. No browsing data is stored. |
 | `identity` | Uses chrome.identity.launchWebAuthFlow to sign the user in on the official santriverse.my.id page (OAuth-style PKCE with state). The password is never entered in the extension. |
 | `https://santriverse.my.id/*` | Hosts the Santriverse sign-in/consent page opened by launchWebAuthFlow. |
 | `https://api.santriverse.my.id/*` | Santriverse API: exchanges the sign-in code for a scoped session, verifies Premium access, lists the Skill catalog and downloads the Skill package the user picked. |
 | `https://gemini.google.com/*` | Content scripts open Gemini's own Skills upload dialog, attach the Skill package the user chose and read the Skills list to show "Installed". They run only after the user clicks Install to Gemini; the user still presses Create. Conversations are not read. |
 | `https://chatgpt.com/*` | Content script opens ChatGPT's own "Upload plugin" dialog on chatgpt.com/plugins, attaches the plugin ZIP the user chose and reads the plugin page to show "Installed". Runs only after the user clicks Install to ChatGPT; the user still presses Install plugin. Conversations are not read. |
+| `https://claude.ai/*` | Content script fills Claude's own "Upload skill" form (claude.ai/customize/skills/new/upload) with the Skill ZIP the user chose and reads the Skills list to show "Installed". Runs only after the user clicks Install to Claude; the user still presses Upload. Conversations are not read. |
 
 ### Remote code
 
@@ -125,7 +128,7 @@ Centang:
 - [x] **Personally identifiable information** — nama dan email akun Santriverse yang ditampilkan di panel.
 - [x] **Authentication information** — token sesi Santriverse yang di-scope khusus Skills.
 
-Jangan dicentang: health, financial and payment, personal communications, location, web history, user activity, website content. (Halaman Gemini/ChatGPT hanya dibaca di perangkat untuk menemukan tombol dan status terpasang; tidak ada yang dikirim keluar.)
+Jangan dicentang: health, financial and payment, personal communications, location, web history, user activity, website content. (Halaman Gemini/ChatGPT/Claude hanya dibaca di perangkat untuk menemukan tombol dan status terpasang; tidak ada yang dikirim keluar.)
 
 Centang ketiga sertifikasi:
 
@@ -149,8 +152,9 @@ Buat akun Santriverse **khusus reviewer** dengan status Premium, lalu ketik user
 1. Click the Santri Skills toolbar icon to open the side panel.
 2. Click "Hubungkan akun Santriverse" and sign in on santriverse.my.id with the test account below, then approve the consent screen.
 3. The Skill catalog appears. Click "Download ZIP" to verify package download, or:
-   - "Pasang ke Gemini": opens gemini.google.com/skills (requires being signed in to a Google account with Gemini) and fills the upload form; click Create to finish.
-   - "Pasang ke ChatGPT": opens chatgpt.com/plugins (requires a signed-in ChatGPT account) and uploads the plugin; click Install plugin to finish.
+   - Gemini tab → "Pasang ke Gemini": opens gemini.google.com/customize/skills (requires being signed in to a Google account with Gemini) and fills the upload form; click Create to finish.
+   - ChatGPT tab → "Pasang ke ChatGPT": opens chatgpt.com/plugins (requires a signed-in ChatGPT account) and uploads the plugin; click Install plugin to finish.
+   - Claude tab → "Pasang ke Claude": opens claude.ai/customize/skills/new/upload (requires a signed-in claude.ai account with code execution enabled) and fills the Skill file field; click Upload to finish.
 4. A non-Premium account sees "Khusus Member Premium" with an upgrade link — this is expected.
 
 Test account (Premium): <isi di dashboard>

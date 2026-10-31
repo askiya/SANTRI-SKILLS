@@ -76,9 +76,12 @@ test('store package asks only for the permissions the listing justifies', () => 
   assert.deepEqual([...manifest.host_permissions].sort(), [
     'https://api.santriverse.my.id/*',
     'https://chatgpt.com/*',
+    'https://claude.ai/*',
     'https://gemini.google.com/*',
     'https://santriverse.my.id/*',
   ]);
+  const listing = fs.readFileSync(path.join(__dirname, '..', 'extension', 'store', 'LISTING.md'), 'utf8');
+  for (const host of manifest.host_permissions) assert.ok(listing.includes(`| \`${host}\` |`), `listing justifies ${host}`);
 });
 
 test('store package loads no remote code', () => {

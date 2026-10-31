@@ -34,13 +34,22 @@ Hak akses dicek oleh API Santriverse, bukan oleh extension: setiap request `/api
 
 Katalog dibagi tiga tab. Admin memilih platform tiap paket di `santriverse.my.id/admin/skills` (kolom `platforms` dari `/api/skills/catalog`); paket hanya muncul di tab yang dicentang. Server lama tanpa `platforms` → skill tampil di Gemini + ChatGPT, Gem hanya di Gemini (`platformsOf()` di `catalog.js`).
 
-- Tab awal mengikuti tab browser aktif (gemini.google.com / chatgpt.com), lalu tab terakhir diingat di `localStorage`.
+- Tab awal mengikuti tab browser aktif (gemini.google.com / chatgpt.com / claude.ai), lalu tab terakhir diingat di `localStorage`.
 - Tiap kartu: satu tombol utama warna platform + **⇩ ZIP** dalam format platform itu (Gemini: paket asli · ChatGPT: plugin · Claude: folder `<nama>/SKILL.md`).
 - Status per platform di `chrome.storage.local`: `install_status`, `chatgpt_status`, `claude_status`. Versi katalog lebih baru → **Update tersedia**.
 
-## Pasang ke Claude (panduan)
+## Pasang ke Claude
 
-`claude-skill.js` menyiapkan ZIP Claude (satu folder bernama skill di root ZIP), menolak nama yang memuat `claude`/`anthropic` atau `description` > 1024 karakter, dan memberi peringatan bila > 200 karakter. Claude langsung membuat skill saat ZIP diunggah (tanpa layar review), jadi member yang mengunggah lewat **Customize → Skills → + → Create skill → Upload a skill**. Tombol **Saya sudah menyelesaikan** mencatat status sebagai laporan member. Tidak ada izin host `claude.ai`.
+claude.ai: **Customize → Skills → Add → Upload skill** membuka `claude.ai/customize/skills/new/upload` dengan input tersembunyi `aria-label="Skill file"` (`.zip,.skill,.md`) dan tombol **Upload** yang aktif setelah file dipilih (terverifikasi 31 Okt 2026). Alur **Pasang ke Claude**:
+
+1. Cek Premium, unduh paket, verifikasi ukuran + SHA-256.
+2. `claude-skill.js` membuat ZIP Claude: satu folder bernama skill di root ZIP. Menolak nama yang memuat `claude`/`anthropic` atau `description` > 1024 karakter; peringatan bila > 200 karakter.
+3. `claude-adapter.js` membuka/memakai tab `claude.ai/customize/skills…` dan mengarahkannya ke halaman Upload skill (tab chat tidak diambil alih).
+4. `claude-skills.js` (content script) mengisi ZIP ke input **Skill file** dan menunggu tombol **Upload** aktif. Teks petunjuk halaman tidak dianggap error; hanya baris baru yang muncul setelah file dipilih.
+5. **Member yang menekan “Upload”** — Claude lalu menjalankan security scan. Extension tidak pernah menekannya.
+6. Panel menandai **Terpasang di Claude** setelah Claude menampilkan `View <nama>` di daftar Skills. Tab Skills Claude yang sudah terbuka juga dibaca saat katalog dimuat.
+
+Fallback manual: **⇩ ZIP** Claude → Customize → Skills → Add → Upload skill → pilih ZIP → **Upload**. Tombol **Saya sudah menyelesaikan** mencatat status sebagai laporan member.
 
 ## Pasang ke Gemini (2 klik)
 
@@ -78,7 +87,7 @@ Fallback manual: **Download ZIP ChatGPT** → chatgpt.com/plugins → + → Ungg
 Dari root repository:
 
 ```bash
-node --test test/extension.test.js test/extension-security.test.js test/extension-member-flow.test.js test/extension-layout.test.js test/extension-gemini-install.test.js test/extension-chatgpt-install.test.js test/extension-platforms.test.js test/extension-store-package.test.js
+node --test test/extension.test.js test/extension-security.test.js test/extension-member-flow.test.js test/extension-layout.test.js test/extension-gemini-install.test.js test/extension-chatgpt-install.test.js test/extension-platforms.test.js test/extension-claude-install.test.js test/extension-store-package.test.js
 ```
 
 Tidak ada runtime package tambahan, secret, atau konfigurasi repository. Load unpacked tidak butuh build step.

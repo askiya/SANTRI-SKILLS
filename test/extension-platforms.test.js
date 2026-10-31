@@ -68,13 +68,17 @@ test('Claude ZIP refuses what claude.ai rejects and warns on long descriptions',
   assert.match(long.warnings[0], /450 karakter/);
 });
 
-test('side panel loads Claude packaging without asking for claude.ai access', () => {
+test('side panel loads Claude packaging and claude.ai runs only an isolated content script', () => {
   const html = read('sidepanel.html');
   assert.ok(html.indexOf('claude-skill.js') > html.indexOf('zip.js'));
-  assert.ok(html.indexOf('claude-skill.js') < html.indexOf('sidepanel.js'));
+  assert.ok(html.indexOf('claude-adapter.js') > html.indexOf('claude-skill.js'));
+  assert.ok(html.indexOf('claude-adapter.js') < html.indexOf('sidepanel.js'));
   assert.ok(html.includes('id="platform-tabs"'));
   const manifest = JSON.parse(read('manifest.json'));
-  assert.ok(!manifest.host_permissions.some(h => h.includes('claude.ai')));
+  assert.ok(manifest.host_permissions.includes('https://claude.ai/*'));
+  const cs = manifest.content_scripts.filter(c => c.matches.includes('https://claude.ai/*'));
+  assert.deepEqual(cs.map(c => c.js), [['claude-skills.js']]);
+  assert.equal(cs[0].world, undefined);
   assert.deepEqual(manifest.permissions.sort(), ['identity', 'sidePanel', 'storage']);
   const code = read('sidepanel.js');
   assert.match(code, /claude: 'claude_status'/);

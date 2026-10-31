@@ -196,19 +196,22 @@
     show(empty);
   }
 
-  /** If a Gemini Skills tab is already open, mark skills Gemini lists there. */
+  /** If a Gemini or Claude Skills tab is already open, mark skills that page lists. */
   async function refreshDetection() {
-    if (typeof detectListed !== 'function') return;
-    const stored = await readStatuses('gemini');
-    const skills = catalogItems.filter(i => (i.kind || i.type) !== 'gem');
-    const nameOf = (i) => stored[i.id]?.name || i.slug;
-    const listed = await detectListed(skills.map(nameOf).filter(Boolean)).catch(() => null);
-    if (!listed) return;
+    const detectors = { gemini: typeof detectListed === 'function' && detectListed, claude: typeof detectClaudeListed === 'function' && detectClaudeListed };
     let changed = false;
-    for (const item of skills) {
-      if (listed.includes(nameOf(item)) && !stored[item.id]) {
-        await writeStatus(item.id, { name: nameOf(item), version: item.version, status: 'detected' }, 'gemini');
-        changed = true;
+    for (const [target, detect] of Object.entries(detectors)) {
+      if (!detect) continue;
+      const stored = await readStatuses(target);
+      const skills = catalogItems.filter(i => (i.kind || i.type) !== 'gem' && platformsOf(i).includes(target));
+      const nameOf = (i) => stored[i.id]?.name || i.slug;
+      const listed = await detect(skills.map(nameOf).filter(Boolean)).catch(() => null);
+      if (!listed) continue;
+      for (const item of skills) {
+        if (listed.includes(nameOf(item)) && (!stored[item.id] || stored[item.id].reported)) {
+          await writeStatus(item.id, { name: nameOf(item), version: stored[item.id]?.version || item.version, status: 'detected' }, target);
+          changed = true;
+        }
       }
     }
     if (changed) renderCatalog();
@@ -320,6 +323,21 @@
       doneTitle: 'Terpasang di ChatGPT ✓',
       doneHint: (_name, title) => `Pakai di chat ChatGPT dengan mengetik @ lalu pilih "${title}".`,
     },
+    claude: {
+      eyebrow: 'PASANG KE CLAUDE',
+      steps: ['Cek akses Premium', 'Unduh & verifikasi paket', 'Siapkan ZIP Claude', 'Buka Upload skill Claude', 'Isi form upload Claude', 'Klik Upload di tab Claude'],
+      failReasons: {
+        navigate: 'Halaman "Upload a skill" Claude tidak terbuka.',
+        upload_page: 'Form Upload skill tidak muncul. Pastikan sudah login di claude.ai.',
+        upload_button: 'Tombol Upload Claude belum aktif setelah file dimasukkan.',
+        rejected: 'Claude menolak file. Bila skill dengan nama sama sudah ada, hapus dulu di Customize → Skills → Yours (… → Delete), lalu pasang lagi.',
+      },
+      waitTitle: 'Tinggal satu klik',
+      waitHint: 'ZIP sudah masuk ke form Claude. Klik "Upload" di tab Claude (Claude menjalankan security scan). Panel ini mendeteksi otomatis begitu skill muncul.',
+      pendingHint: 'Belum terdeteksi. Kalau sudah klik "Upload", buka claude.ai → Customize → Skills → Yours lalu tekan ↻ di katalog.',
+      doneTitle: 'Terpasang di Claude ✓',
+      doneHint: () => 'Pastikan toggle skill menyala dan "Code execution" aktif (Settings → Capabilities). Claude memakainya otomatis saat relevan.',
+    },
   };
   let installing = false;
   let currentSteps = TARGETS.gemini.steps;
@@ -381,9 +399,11 @@
       step(2, 'active');
       let skill;
       let plugin = null;
+      let claudePkg = null;
       try {
         if (target === 'chatgpt') ({ skill, plugin } = await chatGptPluginFrom(blob, item));
         else skill = prepareSkillPackage(await readZip(await blob.arrayBuffer()));
+        if (target === 'claude') claudePkg = buildClaudeZip(skill, item);
       } catch (err) {
         return fail(2, err.message || 'Paket tidak sesuai format skill.');
       }
@@ -391,7 +411,11 @@
 
       step(3, 'active');
       let result;
-      try { result = target === 'chatgpt' ? await assistChatGptInstall(plugin) : await assistInstall(skill); } catch (err) {
+      try {
+        result = target === 'chatgpt' ? await assistChatGptInstall(plugin)
+          : target === 'claude' ? await assistClaudeInstall(claudePkg)
+            : await assistInstall(skill);
+      } catch (err) {
         return fail(3, err.message || 'Halaman tujuan tidak bisa dibuka.');
       }
       if (!result?.ok) {
@@ -402,14 +426,15 @@
       }
       step(3, 'done');
       step(4, 'done');
-      const skippedNote = result.skipped?.length ? ` File dilewati (tidak didukung ${target === 'chatgpt' ? 'ChatGPT' : 'Gemini'}): ${result.skipped.join(', ')}.` : '';
+      const skippedNote = (result.skipped?.length ? ` File dilewati (tidak didukung ${PLATFORMS[target].label}): ${result.skipped.join(', ')}.` : '')
+        + (claudePkg?.warnings?.length ? ` ${claudePkg.warnings.join(' ')}` : '');
 
       step(5, 'active');
       $('#install-title').textContent = cfg.waitTitle;
       setHint(cfg.waitHint + skippedNote, 'info');
-      const installed = target === 'chatgpt'
-        ? await waitUntilChatGptInstalled(result.tabId, result.pluginId)
-        : await waitUntilListed(result.tabId, skill.name);
+      const installed = target === 'chatgpt' ? await waitUntilChatGptInstalled(result.tabId, result.pluginId)
+        : target === 'claude' ? await waitUntilClaudeInstalled(result.tabId, skill.name)
+          : await waitUntilListed(result.tabId, skill.name);
       if (!installed) {
         step(5, 'wait');
         $('#install-title').textContent = 'Menunggu konfirmasi';
@@ -439,7 +464,7 @@
     const type = card?.dataset.type || 'skill';
     const item = catalogItems.find(p => String(p.id) === String(id));
 
-    if (action === 'install' || action === 'install-chatgpt') {
+    if (action === 'install' || action === 'install-chatgpt' || action === 'install-claude') {
       if (!item) return showNotice('Paket tidak tersedia.', 'warn');
       if (!item.file_size || !item.sha256) return showNotice('Paket belum tersedia untuk dipasang.', 'warn');
       if (action === 'install-chatgpt') {
@@ -453,11 +478,7 @@
           return showNotice(`Versi ${item.version} siap. Di halaman plugin: Tindakan plugin → Unggah versi baru → pilih ZIP yang baru diunduh.`, 'warn');
         }
       }
-      installItem(item, action === 'install-chatgpt' ? 'chatgpt' : 'gemini');
-    }
-    if (action === 'install-claude') {
-      if (!item) return showNotice('Paket tidak tersedia.', 'warn');
-      showTutorial('skill', id, 'claude');
+      installItem(item, { install: 'gemini', 'install-chatgpt': 'chatgpt', 'install-claude': 'claude' }[action]);
     }
     if (action === 'open') {
       if (type === 'gem' && item?.gem_url) {
@@ -481,7 +502,7 @@
     },
     claude: {
       title: 'Pasang di Claude', download: 'Download ZIP Claude', open: 'Buka Claude Skills',
-      honesty: 'Claude langsung membuat skill begitu ZIP diunggah (tanpa layar review), jadi unggahan selalu kamu yang memilih. Skill butuh "Code execution" aktif.',
+      honesty: 'Claude menerima ZIP berisi folder skill. Konfirmasi akhir (klik Upload, lalu Claude menjalankan security scan) selalu dilakukan member di Claude. Skill butuh "Code execution" aktif.',
     },
   };
 

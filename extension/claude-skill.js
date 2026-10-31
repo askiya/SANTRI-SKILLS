@@ -1,12 +1,12 @@
 // extension/claude-skill.js – Claude (claude.ai) Skills packaging and manual steps.
 //
-// claude.ai → Customize → Skills → "+" → Create skill → Upload a skill takes a
+// claude.ai → Customize → Skills → Add → Upload skill (/customize/skills/new/upload) takes a
 // ZIP whose root is ONE folder named like the skill, with SKILL.md inside it.
-// Claude creates the skill as soon as the ZIP is chosen (no review screen), so
-// the member uploads it themselves; the extension only prepares the ZIP.
+// The panel's assisted install (claude-adapter.js) puts it into Claude's own
+// form; the member presses "Upload". These manual steps are the fallback.
 'use strict';
 
-const CLAUDE_SKILLS_URL = 'https://claude.ai/customize/skills';
+const CLAUDE_SKILLS_URL = 'https://claude.ai/customize/skills/new/upload';
 const CLAUDE_NAME_MAX = 64;
 // support.claude.com lists 200 characters; the Agent Skills spec allows 1024.
 const CLAUDE_DESCRIPTION_SOFT_MAX = 200;
@@ -16,8 +16,8 @@ function getClaudeManualSteps() {
   return [
     'Download ZIP Claude (klik "Download ZIP Claude"). Jangan diekstrak.',
     'Di claude.ai buka Settings → Capabilities, pastikan "Code execution and file creation" aktif.',
-    'Buka Customize → Skills (klik "Buka Claude Skills").',
-    'Klik "+" → "Create skill" → "Upload a skill", lalu pilih ZIP tadi.',
+    'Klik "Buka Claude Skills" (halaman Customize → Skills → Add → Upload skill).',
+    'Pilih atau tarik ZIP tadi ke kotak "Skill file", lalu klik "Upload".',
     'Pastikan toggle skill menyala. Claude memakainya otomatis saat relevan.',
   ];
 }
