@@ -9,6 +9,7 @@
 //   Cursor       skills ~/.cursor/skills                MCP ~/.cursor/mcp.json (mcpServers)
 //   VS Code      skills ~/.copilot/skills               MCP <VS Code user dir>/mcp.json (servers, type stdio)
 //   Windsurf     skills ~/.codeium/windsurf/skills      MCP ~/.codeium/windsurf/mcp_config.json (mcpServers)
+// Remote (HTTP) MCP servers use each vendor's own key: `http` below (Codex: url = "...").
 // Several harnesses also read each other's skill folders (Cursor and VS Code read
 // ~/.claude/skills and ~/.agents/skills, ...): `reads` lists them so the UI can say so.
 //
@@ -48,25 +49,25 @@ function harnessDefs({ home = os.homedir(), env = process.env, platform = proces
   const vscode = vscodeUserDir(home, env, platform);
   return [
     { id: 'antigravity', name: 'Google Antigravity', skillsDir: dirs.antigravity, reads: [dirs.antigravity],
-      mcp: { format: 'json', file: path.join(agBase, 'mcp_config.json'), key: 'mcpServers' },
+      mcp: { format: 'json', file: path.join(agBase, 'mcp_config.json'), key: 'mcpServers', http: { url: 'serverUrl' } },
       evidence: [agBase, path.join(home, '.gemini', 'antigravity')] },
     { id: 'claude-code', name: 'Claude Code', skillsDir: dirs.claude, reads: [dirs.claude],
-      mcp: { format: 'json', file: path.join(home, '.claude.json'), key: 'mcpServers' },
+      mcp: { format: 'json', file: path.join(home, '.claude.json'), key: 'mcpServers', http: { type: 'http', url: 'url' } },
       evidence: [path.join(home, '.claude'), path.join(home, '.claude.json')], restartHint: 'Mulai sesi Claude Code baru.' },
     { id: 'codex', name: 'Codex', skillsDir: dirs.agents, reads: [dirs.agents, dirs.codexLegacy],
       mcp: { format: 'toml', file: path.join(codexHome, 'config.toml') },
       evidence: [codexHome] },
     { id: 'gemini-cli', name: 'Gemini CLI', skillsDir: dirs.gemini, reads: [dirs.gemini, dirs.agents],
-      mcp: { format: 'json', file: path.join(home, '.gemini', 'settings.json'), key: 'mcpServers' },
+      mcp: { format: 'json', file: path.join(home, '.gemini', 'settings.json'), key: 'mcpServers', http: { url: 'httpUrl' } },
       evidence: [path.join(home, '.gemini', 'settings.json'), dirs.gemini] },
     { id: 'cursor', name: 'Cursor', skillsDir: dirs.cursor, reads: [dirs.cursor, dirs.agents, dirs.claude, dirs.codexLegacy],
-      mcp: { format: 'json', file: path.join(home, '.cursor', 'mcp.json'), key: 'mcpServers', stdioType: true },
+      mcp: { format: 'json', file: path.join(home, '.cursor', 'mcp.json'), key: 'mcpServers', stdioType: true, http: { url: 'url' } },
       evidence: [path.join(home, '.cursor')] },
     { id: 'vscode', name: 'VS Code (Copilot)', skillsDir: dirs.copilot, reads: [dirs.copilot, dirs.claude, dirs.agents],
-      mcp: { format: 'json', file: path.join(vscode, 'mcp.json'), key: 'servers', stdioType: true },
+      mcp: { format: 'json', file: path.join(vscode, 'mcp.json'), key: 'servers', stdioType: true, http: { type: 'http', url: 'url' } },
       evidence: [vscode] },
     { id: 'windsurf', name: 'Windsurf', skillsDir: dirs.windsurf, reads: [dirs.windsurf],
-      mcp: { format: 'json', file: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), key: 'mcpServers' },
+      mcp: { format: 'json', file: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), key: 'mcpServers', http: { url: 'serverUrl' } },
       evidence: [path.join(home, '.codeium', 'windsurf')] },
   ];
 }
@@ -111,9 +112,16 @@ function writeState(file, state) {
   try { fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); fs.renameSync(tmp, file); } finally { fs.rmSync(tmp, { force: true }); }
 }
 
-/** The entry as this harness wants it: VS Code and Cursor document `type: "stdio"`. */
+/**
+ * The entry as this harness wants it: VS Code and Cursor document `type: "stdio"`; a remote
+ * server ({ url }) goes under the harness's own key. `env` (API keys) is passed as given.
+ */
 function entryFor(h, base) {
-  const entry = { command: base.command, args: [...base.args] };
+  if (base.url) {
+    const http = h.mcp.http || { url: 'url' };
+    return { ...(http.type ? { type: http.type } : {}), [http.url]: base.url };
+  }
+  const entry = { command: base.command, args: [...base.args], ...(base.env && Object.keys(base.env).length ? { env: { ...base.env } } : {}) };
   return h.mcp.stdioType ? { type: 'stdio', ...entry } : entry;
 }
 const withoutStdioType = (e) => {
@@ -125,7 +133,10 @@ const withoutStdioType = (e) => {
 // Codex: a tiny TOML writer for exactly one table, [mcp_servers.<name>]. Everything
 // else in config.toml is kept byte for byte.
 const tomlString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\x00-\x1f\x7f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}"`;
-const tomlBlock = (name, e) => `[mcp_servers.${name}]\ncommand = ${tomlString(e.command)}\nargs = [${e.args.map(tomlString).join(', ')}]\n`;
+const tomlKey = (k) => (/^[A-Za-z0-9_-]+$/.test(k) ? k : tomlString(k));
+const tomlEnv = (env) => (env ? `env = { ${Object.entries(env).map(([k, v]) => `${tomlKey(k)} = ${tomlString(v)}`).join(', ')} }\n` : '');
+const tomlBlock = (name, e) => (e.url ? `[mcp_servers.${name}]\nurl = ${tomlString(e.url)}\n`
+  : `[mcp_servers.${name}]\ncommand = ${tomlString(e.command)}\nargs = [${e.args.map(tomlString).join(', ')}]\n${tomlEnv(e.env)}`);
 const isHeader = (line) => /^\s*\[/.test(line);
 const serverHeader = (line) => {
   const m = /^\s*\[\s*mcp_servers\s*\.\s*("?)([A-Za-z0-9_-]+)\1\s*(\.[^\]]*)?\]\s*(#.*)?$/.exec(line);

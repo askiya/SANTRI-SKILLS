@@ -1,6 +1,6 @@
 'use strict';
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],show=(el,v=true)=>{el.hidden=!v};
-const PAGES={home:'Home',skills:'Skills',mcp:'MCP Servers',library:'Skill Saya',agents:'AI Agents',status:'Status Config',repos:'Repositories',extensions:'Extensions',activity:'Activity'};
+const PAGES={home:'Beranda',add:'1 · Tambah',collection:'2 · Koleksi',agents:'3 · Aktifkan',status:'4 · Cek & Tes',skills:'Skills terpasang (Antigravity)',mcp:'MCP terpasang (Antigravity)',library:'Skill Saya',repos:'Repositories',extensions:'Extensions',activity:'Riwayat'};
 let catalog={skills:[],mcpServers:[]},csrf='',lastStatus=null;
 let statusTimer=null,statusRequest=null,statusEpoch=0;
 const selectedSkills=new Set();
@@ -12,9 +12,11 @@ function done(t){status(t);log(t)}function fail(e){status(e.message,true);log(e.
 const scope=()=> 'global';
 function esc(s){const d=document.createElement('span');d.textContent=s==null?'':String(s);return d.innerHTML}
 
-async function post(url,body={},signal){
+// CSRF tokens live 15 minutes; an app left open gets a fresh one (premium re-checked) and retries once.
+async function post(url,body={},signal,retried=false){
   const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,_csrf:csrf}),signal});
-  const data=await res.json();if(!res.ok)throw Object.assign(new Error(data.error||'Gagal'),{forceRequired:data.forceRequired===true});return data}
+  const data=await res.json();
+  if(res.status===403&&/CSRF/i.test(data.error||'')&&!retried){try{csrf=(await getJson('/api/auth/status')).csrf}catch{throw new Error('Sesi berakhir. Login lagi.')}return post(url,body,signal,true)}if(!res.ok)throw Object.assign(new Error(data.error||'Gagal'),{forceRequired:data.forceRequired===true});return data}
 async function getJson(url,signal){const res=await fetch(url,{signal});const data=await res.json();if(!res.ok)throw new Error(data.error||'Gagal');return data}
 async function busy(btn,msg,fn){btn.disabled=true;show($('#progress'));status(msg);try{await fn()}catch(e){fail(e)}finally{btn.disabled=false;show($('#progress'),false)}}
 const confirmGlobal=what=>scope()!=='global'||confirm(`${what} ke scope GLOBAL: semua project terdampak. Lanjutkan?`);
@@ -53,23 +55,30 @@ function renderAgents(){const all=$('#agents-all').checked,shown=agents.filter(h
     card.append(el('strong',null,h.name),el('span','pill '+(h.detected?'ok':''),h.detected?'TERDETEKSI':'BELUM ADA'),el('small','muted',`${h.skills.length} skill · ${h.mcp.names.length} MCP`));
     const path=el('code','agent-path',h.skillsDir);path.title=h.sharedWith.length?'Folder ini juga dibaca: '+h.sharedWith.join(', '):'';card.append(path);return card}):[el('p','muted','Tidak ada data.')]));
   if(!shown.length){$('#agents-matrix').replaceChildren(el('caption',null,'Belum ada AI agent terdeteksi. Centang "Tampilkan agent yang belum terdeteksi" untuk menyiapkan lebih dulu.'));return}
-  const rows=[...librarySkills.map(s=>({kind:'skill',id:s.id,label:s.id,desc:s.description,mine:true})),...catalog.skills.map(s=>({kind:'skill',id:s.id,label:s.id,desc:s.description})),{kind:'mcp',id:GATEWAY_ID,label:'SantriHub Gateway',desc:'Satu MCP berisi MCP pilihan Anda di panel Gateway'},...catalog.mcpServers.map(m=>({kind:'mcp',id:m.id,label:m.label||m.id,desc:m.description}))]
-    .filter(r=>!q||(r.label+' '+(r.desc||'')).toLowerCase().includes(q));
+  const rows=allItems({gateway:true}).filter(r=>!q||(r.label+' '+(r.desc||'')+' '+paketById(r.paket[0]).short).toLowerCase().includes(q));
   const head=el('tr');head.append(el('th',null,'Skill / MCP'),...shown.map(h=>{const th=el('th',null,h.name);th.scope='col';return th}));
-  const body=rows.map(r=>{const tr=el('tr');const name=el('th');name.scope='row';name.append(el('span','agent-kind '+r.kind+(r.mine?' mine':''),r.kind==='mcp'?'MCP':r.mine?'SAYA':'SKILL'),el('span',null,' '+r.label));if(r.desc)name.title=r.desc;tr.append(name);
+  const rowFor=r=>{const tr=el('tr');const name=el('th');name.scope='row';name.append(el('span','agent-kind '+r.kind+(r.mine?' mine':''),r.kind==='mcp'?'MCP':r.mine?'SAYA':'SKILL'),el('span',null,' '+r.label));if(r.desc)name.title=r.desc;tr.append(name);
     for(const h of shown){const c=agentCell(h,r.kind,r.id),td=el('td','agent-cell '+c.state),box=document.createElement('input');box.type='checkbox';box.checked=c.on;
       box.disabled=c.state==='foreign'||agentsBusy;box.setAttribute('aria-label',`${r.label} di ${h.name}`);box.onchange=()=>toggleAgent(h,r,box);td.append(box);if(c.note)td.append(el('small',null,c.note));tr.append(td)}
-    return tr});
+    return tr};
+  const body=[];
+  for(const id of [...new Set(rows.map(r=>r.paket[0]))].sort((a,b)=>paketOrder(a)-paketOrder(b))){const group=rows.filter(r=>r.paket[0]===id),p=paketById(id);
+    const tr=el('tr','paket-row'),th=el('th');th.scope='rowgroup';th.append(paketPill(id),el('span',null,` ${p.label} · ${group.length}`));if(p.author)th.title='oleh '+p.author;tr.append(th);
+    for(const h of shown){const usable=group.filter(r=>agentCell(h,r.kind,r.id).state!=='foreign'),onN=usable.filter(r=>agentCell(h,r.kind,r.id).on).length;
+      const td=el('td','agent-cell paket-cell'),box=document.createElement('input');box.type='checkbox';box.checked=usable.length>0&&onN===usable.length;box.indeterminate=onN>0&&onN<usable.length;
+      box.disabled=agentsBusy||!usable.length;box.setAttribute('aria-label',`Semua ${p.short} di ${h.name}`);box.onchange=()=>bulkToggle(h,usable,box.checked);td.append(box,el('small',null,`${onN}/${usable.length}`));tr.append(td)}
+    body.push(tr,...group.map(rowFor))}
   $('#agents-matrix').replaceChildren(el('thead'),el('tbody'));$('#agents-matrix thead').append(head);$('#agents-matrix tbody').append(...body)}
-async function loadAgents(){try{const [h,lib,gw,pr]=await Promise.all([getJson('/api/harnesses'),getJson('/api/library'),getJson('/api/gateway'),getJson('/api/profiles')]);agents=h.harnesses||[];librarySkills=lib.skills||[];gatewayServers=gw.servers||[];profiles=pr.profiles||{};renderAgents();renderGateway();renderProfiles()}catch(e){$('#agents-cards').replaceChildren(el('p','muted','AI agent belum bisa dideteksi.'));fail(e)}}
+async function loadAgents(){try{const [h,lib,gw,pr,mine,own]=await Promise.all([getJson('/api/harnesses'),getJson('/api/library'),getJson('/api/gateway'),getJson('/api/profiles'),getJson('/api/mcp-library'),getJson('/api/my-paket')]);agents=h.harnesses||[];myMcp=mine.servers||[];myPaket=own.paket||[];librarySkills=lib.skills||[];gatewayServers=gw.servers||[];profiles=pr.profiles||{};renderAgents();renderGateway();renderProfiles();renderFlow()}catch(e){$('#agents-cards').replaceChildren(el('p','muted','AI agent belum bisa dideteksi.'));fail(e)}}
 async function toggleAgent(h,r,box){const enable=box.checked;agentsBusy=true;$$('#agents-matrix input').forEach(i=>{i.disabled=true});show($('#progress'));status(`${enable?'Mengaktifkan':'Menonaktifkan'} ${r.label} di ${h.name}…`);
   try{const res=await post(r.kind==='mcp'?'/api/harnesses/mcp':'/api/harnesses/skill',{harness:h.id,id:r.id,enable});done(`✓ ${r.label} ${enable?'aktif':'nonaktif'} di ${h.name}. ${res.hint||''}`)}
   catch(e){fail(e)}finally{agentsBusy=false;show($('#progress'),false);await loadAgents()}}
 // ─ Gateway + profiles (AI Agents page): /api/gateway, /api/profiles ─
 let gatewayServers=[],profiles={};
 function renderGateway(){const host=$('#gateway-list');
-  if(!catalog.mcpServers.length){host.replaceChildren(el('p','muted','Katalog MCP kosong.'));return}
-  host.replaceChildren(...catalog.mcpServers.map(m=>{const name=m.id,row=el('label','gateway-row'),box=document.createElement('input');box.type='checkbox';box.checked=gatewayServers.includes(name);box.setAttribute('aria-label',`${m.label||m.id} lewat SantriHub Gateway`);
+  const rows=[...catalog.mcpServers,...myMcp.filter(m=>m.kind==='stdio').map(m=>({id:m.id,label:m.name+' (milik saya)',description:m.summary}))];
+  if(!rows.length){host.replaceChildren(el('p','muted','Katalog MCP kosong.'));return}
+  host.replaceChildren(...rows.map(m=>{const name=m.id,row=el('label','gateway-row'),box=document.createElement('input');box.type='checkbox';box.checked=gatewayServers.includes(name);box.setAttribute('aria-label',`${m.label||m.id} lewat SantriHub Gateway`);
     box.onchange=async()=>{box.disabled=true;try{const r=await post('/api/gateway',{id:m.id,enable:box.checked});gatewayServers=r.servers;done(`✓ ${m.label||m.id} ${box.checked?'masuk':'keluar dari'} Gateway. ${r.hint}`)}catch(e){box.checked=!box.checked;fail(e)}finally{box.disabled=false}};
     row.append(box,el('strong',null,m.label||m.id),el('small','muted',m.description||''));return row}))}
 function renderProfiles(){const sel=$('#profile-source'),keep=sel.value;sel.replaceChildren(...agents.filter(h=>h.detected).map(h=>{const o=el('option',null,h.name);o.value=h.id;return o}));if(keep)sel.value=keep;
@@ -91,14 +100,14 @@ let librarySkills=[],libPreview=null;
 const readFile=file=>new Promise((ok,no)=>{if(file.size>512*1024)return no(new Error(`${file.name} melebihi 512 KB.`));const r=new FileReader();r.onload=()=>ok(String(r.result));r.onerror=()=>no(new Error(`${file.name} tidak bisa dibaca.`));r.readAsText(file)});
 function renderLibrary(){const host=$('#library-list');
   if(!librarySkills.length){host.replaceChildren(el('p','muted','Library masih kosong. Import dari GitHub atau buat dari Markdown.'));return}
-  host.replaceChildren(...librarySkills.map(s=>{const card=el('article','panel lib-card');const head=el('div','lib-card-head');head.append(el('strong',null,s.id),el('span','pill',s.type==='github'?'GITHUB':'MARKDOWN'));if(s.generated)head.append(el('span','pill','SKILL.md DIBUAT OTOMATIS'));
+  host.replaceChildren(...librarySkills.map(s=>{const card=el('article','panel lib-card');const head=el('div','lib-card-head');head.append(el('strong',null,s.id),el('span','pill',({github:'GITHUB',upload:'UPLOAD'})[s.type]||'MARKDOWN'));if(s.generated)head.append(el('span','pill','SKILL.md DIBUAT OTOMATIS'));
     const about=el('p',null,s.description||'(tanpa deskripsi)');about.title=s.description||'';card.append(head,about);
     if(s.repo){const link=el('a','lib-source','github.com/'+s.repo);link.href='https://github.com/'+s.repo;link.target='_blank';link.rel='noopener noreferrer';card.append(link)}
     const actions=el('div','lib-actions');const use=el('button','secondary','Aktifkan di AI Agents');use.type='button';use.onclick=()=>{$('#agents-search').value=s.id;go('agents')};actions.append(use);
     if(s.type==='github'){const upd=el('button','secondary','Cek update');upd.type='button';upd.onclick=()=>busy(upd,`Mengecek ${s.id} di GitHub…`,async()=>{const r=await post('/api/library/update',{id:s.id});done(r.changed?`✓ ${s.id} diperbarui${r.synced?.length?` (juga di ${r.synced.join(', ')})`:''}.`:`✓ ${s.id} sudah versi terbaru.`);await loadLibrary()});actions.append(upd)}
     const del=el('button','secondary danger','Hapus');del.type='button';del.onclick=()=>{if(!confirm(`Hapus ${s.id} dari library? Salinannya di AI agent juga dinonaktifkan.`))return;busy(del,`Menghapus ${s.id}…`,async()=>{const r=await post('/api/library/delete',{id:s.id});done(`✓ ${s.id} dihapus${r.deactivated?.length?` dan dinonaktifkan di ${r.deactivated.join(', ')}`:''}.`);await loadLibrary()})};actions.append(del);
     card.append(actions);return card}))}
-async function loadLibrary(){try{librarySkills=(await getJson('/api/library')).skills||[];renderLibrary()}catch(e){$('#library-list').replaceChildren(el('p','muted','Library belum bisa dimuat.'));fail(e)}}
+async function loadLibrary(){try{librarySkills=(await getJson('/api/library')).skills||[];renderLibrary();renderFlow()}catch(e){$('#library-list').replaceChildren(el('p','muted','Library belum bisa dimuat.'));fail(e)}}
 function closeLibPanels(){show($('#lib-github'),false);show($('#lib-md'),false);libPreview=null;$('#lib-github-results').replaceChildren();show($('#lib-github-actions'),false)}
 $('#lib-open-github').onclick=()=>{closeLibPanels();show($('#lib-github'));$('#lib-github-url').focus()};
 $('#lib-open-md').onclick=()=>{closeLibPanels();show($('#lib-md'));$('#lib-md-content').focus()};
@@ -124,6 +133,293 @@ $('#lib-md-save').onclick=()=>busy($('#lib-md-save'),'Menyimpan skill…',async(
 
 $('#agents-all').onchange=renderAgents;$('#agents-search').oninput=renderAgents;$('#agents-refresh').onclick=()=>busy($('#agents-refresh'),'Mendeteksi AI agent…',loadAgents);
 
+// ─ Alur kerja: Beranda (langkah + agent), Tambah (sumber), Koleksi (katalog premium + milik Anda) ─
+let collectionKind='skills',collectionPaket='all',myMcp=[],myPaket=[];
+const detectedAgents=()=>agents.filter(h=>h.detected);
+// Agents where a skill/MCP is on; MCP in the Gateway counts for every agent that has the Gateway.
+function activeIn(kind,id){return detectedAgents().filter(h=>agentCell(h,kind,id).on||(kind==='mcp'&&gatewayServers.includes(id)&&agentCell(h,'mcp',GATEWAY_ID).on)).map(h=>h.name)}
+function renderCollection(){const host=$('#collection-list');if(!host)return;const q=$('#collection-search').value.trim().toLowerCase(),items=allItems(),all={skills:items.filter(r=>r.kind==='skill'),mcp:items.filter(r=>r.kind==='mcp')};
+  renderPaketCards(items);renderPaketFilters();renderPaketBulk(items.filter(r=>r.paket.includes(collectionPaket)));
+  const keep=r=>(collectionPaket==='all'||r.paket.includes(collectionPaket))&&(!q||(r.label+' '+(r.desc||'')+' '+r.by+' '+r.paket.map(id=>paketById(id).short).join(' ')).toLowerCase().includes(q));
+  const shown={skills:all.skills.filter(keep),mcp:all.mcp.filter(keep)};
+  $('#collection-count-skills').textContent=shown.skills.length;$('#collection-count-mcp').textContent=shown.mcp.length;
+  $$('[data-collection-kind]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.collectionKind===collectionKind)));
+  const rows=shown[collectionKind];
+  if(!rows.length){const empty=el('div','collection-empty');empty.append(el('p','muted',q?'Tidak ada yang cocok dengan pencarian.':collectionPaket==='mine'?'Belum ada skill atau MCP milik Anda. Tambahkan lewat impor pintar.':'Koleksi masih kosong.'));
+    const add=el('button','home-create','+ Tambah skill / MCP');add.type='button';add.onclick=()=>go('add');empty.append(add);host.replaceChildren(empty);return}
+  host.replaceChildren(...rows.map(r=>{const card=el('article','collection-card'+(r.mine?' mine':''));const head=el('div','collection-card-head');
+    head.append(el('strong',null,r.label),...r.paket.map(paketPill));if(r.starter)head.append(el('span','pill starter','SKILL PEMBUKA'));card.append(head,el('small','collection-by',r.by));
+    const about=el('p',null,r.desc||'(tanpa deskripsi)');about.title=r.desc||'';card.append(about);
+    const on=activeIn(r.kind,r.id),where=el('small','collection-active'+(on.length?' on':''));
+    where.textContent=on.length?'Aktif di '+on.join(', '):agents.length?'Belum aktif di AI agent mana pun':'Status AI agent belum dimuat';
+    if(r.gateway)where.textContent+=' · lewat Gateway';card.append(where);
+    const actions=el('div','collection-actions'),use=el('button','home-create',on.length?'Atur agent →':'Aktifkan →');use.type='button';
+    use.onclick=()=>{$('#agents-search').value=r.id;go('agents');renderAgents()};actions.append(use);
+    if(r.kind==='mcp'){const t=el('button','secondary','Tes koneksi');t.type='button';t.onclick=()=>testMcp(r.id,card,t);actions.append(t)}
+    if(r.mine){const pk=el('button','secondary','Paket…');pk.type='button';pk.onclick=()=>paketChooser(r,card);actions.append(pk)}
+    if(r.mine&&r.kind==='skill'){const manage=el('button','secondary','Kelola');manage.type='button';manage.onclick=()=>go('library');actions.append(manage)}
+    if(r.mine&&r.kind==='mcp'){const del=el('button','secondary danger','Hapus');del.type='button';del.onclick=()=>{if(!confirm(`Hapus MCP ${r.label} dari koleksi? Salinannya di AI agent juga dinonaktifkan.`))return;busy(del,`Menghapus ${r.label}…`,async()=>{const x=await post('/api/mcp-library/delete',{id:r.id});done(`✓ ${r.label} dihapus${x.deactivated.length?` dan dinonaktifkan di ${x.deactivated.join(', ')}`:''}.`);await loadAgents()})};actions.append(del)}
+    card.append(actions);return card}))}
+function renderHomeSteps(){const host=$('#home-steps');if(!host)return;const found=detectedAgents();
+  const items=catalog.skills.length+librarySkills.length+catalog.mcpServers.length;
+  const active=found.reduce((n,h)=>n+h.skills.filter(s=>s.managed).length+h.mcp.names.length,0);
+  const steps=[
+    {page:'add',title:'Tambah ke Koleksi',done:items>0,detail:items?`${catalog.skills.length} skill premium · ${librarySkills.length} milik Anda · ${catalog.mcpServers.length} MCP`:'Ambil dari katalog, GitHub, atau Markdown'},
+    {page:'agents',title:'Aktifkan di AI agent',done:active>0,detail:!found.length?'Belum ada AI agent terdeteksi':active?`${active} item aktif di ${found.length} agent`:`Pilih skill untuk ${found.map(h=>h.name).slice(0,3).join(', ')}`},
+    {page:'status',title:'Cek & Tes di chat',done:false,detail:'Reload AI agent, lalu coba di chat'}];
+  const next=steps.findIndex(s=>!s.done);
+  host.replaceChildren(...steps.map((s,i)=>{const li=el('li','home-step'+(s.done?' done':'')+(i===next?' next':'')),b=el('button','home-step-btn');b.type='button';b.onclick=()=>go(s.page);
+    b.append(el('span','home-step-num',s.done?'✓':String(i+1)),el('span','home-step-title',s.title),el('span','home-step-state',s.detail));if(i===next)b.append(el('span','home-step-badge','Mulai di sini'));
+    li.append(b);return li}))}
+function renderHomeAgents(){const host=$('#home-agents');if(!host)return;const found=detectedAgents();
+  if(!agents.length){host.replaceChildren(el('span','muted','AI agent belum bisa dideteksi.'));return}
+  const chips=found.map(h=>{const b=el('button','agent-chip');b.type='button';b.onclick=()=>go('agents');
+    b.append(el('i','agent-dot'),el('strong',null,h.name),el('small',null,`${h.skills.length} skill · ${h.mcp.names.length} MCP`));return b});
+  if(!found.length)chips.push(el('span','muted','Belum ada AI agent terdeteksi. Pasang Claude Code, Codex, Gemini CLI, Cursor, atau Antigravity dulu.'));
+  const rest=agents.length-found.length;if(rest){const more=el('button','agent-chip ghost',`+${rest} agent bisa disiapkan`);more.type='button';more.onclick=()=>{$('#agents-all').checked=true;go('agents');renderAgents()};chips.push(more)}
+  host.replaceChildren(...chips)}
+function renderFlow(){renderHomeSteps();renderHomePaths();renderHomeAgents();renderCollection();renderAgentChecks();$('#stat-library').textContent=librarySkills.length?`+ ${librarySkills.length} skill milik Anda`:'+ skill milik Anda'}
+$$('[data-collection-kind]').forEach(b=>b.onclick=()=>{collectionKind=b.dataset.collectionKind;renderCollection()});
+$('#collection-search').oninput=renderCollection;
+const ADD_SOURCES={
+  'catalog-skills':()=>openCatalog('skills'),'catalog-mcp':()=>openCatalog('mcp'),
+  github:()=>{go('library');$('#lib-open-github').click()},markdown:()=>{go('library');$('#lib-open-md').click()},
+  local:()=>{openCatalog('skills');$('#catalog-local').open=true},repos:()=>go('repos'),
+  'mcp-wizard':()=>$('[data-add-kind=mcp]').click()};
+$$('[data-add-source]').forEach(b=>b.onclick=()=>ADD_SOURCES[b.dataset.addSource]());
+
+// ─ Paket: Apps Script, Monorepo, Umum (from /api/catalog) and the member's own ─
+const PAKET_MINE={id:'mine',short:'Milik saya',label:'Milik saya',description:'Skill dan MCP yang Anda impor sendiri: ZIP, folder, GitHub, Markdown.',author:'Anda',color:'coral',icon:'☺',order:1000};
+const paketList=()=>[...(catalog.paket||[]),...myPaket.map(p=>({...p,author:'Anda',custom:true,order:500})),PAKET_MINE];
+const paketById=id=>paketList().find(p=>p.id===id)||{id,short:id,label:id,description:'',color:'gray',icon:'•',author:''};
+const paketPill=id=>{const p=paketById(id);const pill=el('span','pill paket paket-'+p.color,p.short);pill.title=p.label;return pill};
+const libraryOrigin=s=>s.type==='github'?`dari GitHub ${s.repo||''}`.trim():s.type==='upload'?`dari upload ${s.origin||''}`.trim():'ditulis sendiri (Markdown)';
+// Every skill and MCP SantriHub knows, with its paket and who made it. Koleksi and the Aktifkan table both read this.
+function allItems({gateway=false}={}){const premium=id=>{const p=paketById(id);return `${p.author?'oleh '+p.author+' · ':''}premium`};
+  return [...librarySkills.map(s=>({kind:'skill',id:s.id,label:s.id,desc:s.description,mine:true,paket:[...(s.paket||[]),'mine'],by:libraryOrigin(s)})),
+    ...catalog.skills.map(s=>({kind:'skill',id:s.id,label:s.id,desc:s.description,paket:[s.source],by:premium(s.source),starter:paketById(s.source).starter===s.id})),
+    ...(gateway?[{kind:'mcp',id:GATEWAY_ID,label:'SantriHub Gateway',desc:'Satu MCP berisi MCP pilihan Anda di panel Gateway',paket:['umum'],by:'SantriHub'}]:[]),
+    ...myMcp.map(m=>({kind:'mcp',id:m.id,label:m.name,desc:m.summary+(m.envKeys.length?` · env: ${m.envKeys.join(', ')}`:''),mine:true,paket:[...(m.paket||[]),'mine'],by:m.from?'dari '+m.from:'MCP Anda',gateway:gatewayServers.includes(m.id)})),
+    ...catalog.mcpServers.map(m=>({kind:'mcp',id:m.id,label:m.label||m.id,desc:m.description,paket:m.paket||['umum'],by:'Santriverse · premium',gateway:gatewayServers.includes(m.id)}))]}
+const paketOrder=id=>{const i=paketList().findIndex(p=>p.id===id);return i<0?999:i};
+// One paket (or any set) on/off for one agent in a single request.
+async function bulkToggle(h,items,enable){if(agentsBusy||!items.length)return;agentsBusy=true;$$('#agents-matrix input,#paket-bulk button,#paket-bulk select').forEach(i=>{i.disabled=true});show($('#progress'));
+  status(`${enable?'Mengaktifkan':'Menonaktifkan'} ${items.length} item di ${h.name}…`);
+  try{const r=await post('/api/harnesses/bulk',{harness:h.id,enable,skills:items.filter(x=>x.kind==='skill').map(x=>x.id),mcp:items.filter(x=>x.kind==='mcp').map(x=>x.id)});
+    if(r.failed.length){status(`${r.done.length} berhasil, ${r.failed.length} gagal: ${r.failed.map(f=>`${f.id} (${f.error})`).join('; ')}`,true);log(`Sebagian gagal di ${h.name}: ${r.failed.map(f=>f.id).join(', ')}`,true)}
+    else done(`✓ ${r.done.length} item ${enable?'aktif':'nonaktif'} di ${h.name}. ${r.hint||''}`)}
+  catch(e){fail(e)}finally{agentsBusy=false;show($('#progress'),false);await loadAgents()}}
+function renderPaketCards(items){const host=$('#paket-cards');
+  host.replaceChildren(...paketList().map(p=>{const own=items.filter(r=>r.paket.includes(p.id)),sk=own.filter(r=>r.kind==='skill').length,mc=own.filter(r=>r.kind==='mcp').length;
+    if(!own.length&&p.id!=='mine'&&!p.custom)return null;
+    const card=el('button','paket-card paket-'+p.color+(collectionPaket===p.id?' on':''));card.type='button';card.setAttribute('aria-pressed',String(collectionPaket===p.id));
+    card.onclick=()=>{collectionPaket=collectionPaket===p.id?'all':p.id;renderCollection()};
+    const head=el('span','paket-card-head');head.append(el('span','paket-icon',p.icon),el('strong',null,p.short));card.append(head,el('small','paket-desc',p.description));
+    card.append(el('span','paket-meta',[sk&&`${sk} skill`,mc&&`${mc} MCP`].filter(Boolean).join(' · ')||'Belum ada isi'),el('span','paket-by',p.author?'oleh '+p.author:''));
+    if(p.starter)card.append(el('span','paket-starter','Mulai dari: '+p.starter));return card}).filter(Boolean),newPaketCard())}
+function renderPaketFilters(){const host=$('#collection-filters');
+  host.replaceChildren(...[{id:'all',short:'Semua'},...paketList()].map(p=>{const b=el('button',null,p.short);b.type='button';b.setAttribute('aria-pressed',String(collectionPaket===p.id));b.onclick=()=>{collectionPaket=p.id;renderCollection()};return b}))}
+function renderPaketBulk(items){const host=$('#paket-bulk'),found=detectedAgents(),p=paketById(collectionPaket);show(host,collectionPaket!=='all'&&(items.length>0||p.custom));if(host.hidden){host.replaceChildren();return}
+  const remove=()=>{const b=el('button','secondary danger','Hapus paket');b.type='button';b.onclick=()=>deletePaket(p,b);return b};
+  if(!items.length){host.replaceChildren(el('span','muted',`Paket ${p.short} masih kosong. Tandai skill milik Anda lewat tombol "Paket…" di kartunya.`),remove());return}
+  const label=el('span',null,`Semua ${items.length} item `),sel=document.createElement('select');sel.setAttribute('aria-label','AI agent');label.append(paketPill(p.id),document.createTextNode(' di'));
+  for(const h of found){const o=el('option',null,h.name);o.value=h.id;sel.append(o)}
+  if(!found.length){host.replaceChildren(el('span','muted','Belum ada AI agent terdeteksi untuk memasang paket ini.'));return}
+  const target=()=>agents.find(h=>h.id===sel.value);
+  const on=el('button','home-create','Aktifkan semua');on.type='button';on.onclick=()=>bulkToggle(target(),items.filter(r=>agentCell(target(),r.kind,r.id).state!=='foreign'),true);
+  const off=el('button','secondary','Nonaktifkan semua');off.type='button';off.onclick=()=>{if(confirm(`Nonaktifkan semua item ${p.short} di ${target().name}?`))bulkToggle(target(),items.filter(r=>agentCell(target(),r.kind,r.id).state!=='foreign'),false)};
+  host.replaceChildren(label,sel,on,off,...(p.custom?[remove()]:[]))}
+
+// ─ Tahap 4: own paket and tagging own skills/MCP; Tahap 5: "Pilih jalur proyek" on Beranda ─
+const COLOR_NAMES={teal:'Hijau toska',purple:'Ungu',coral:'Oranye',blue:'Biru',amber:'Kuning',pink:'Merah muda',green:'Hijau',gray:'Abu-abu'};
+function paketChooser(r,host){host.querySelector('.paket-chooser')?.remove();const box=el('div','paket-chooser'),list=el('div','paket-chooser-list'),current=new Set(r.paket);
+  box.append(el('strong',null,'Tampilkan juga di paket'));
+  for(const p of paketList().filter(p=>p.id!=='mine')){const l=el('label','check-line'),b=document.createElement('input');b.type='checkbox';b.value=p.id;b.checked=current.has(p.id);l.append(b,paketPill(p.id));list.append(l)}
+  box.append(list,el('small','muted','Tetap ada di "Milik saya". Paket hanya mengelompokkan; isi skill tidak berubah.'));
+  const save=el('button','home-create','Simpan');save.type='button';
+  save.onclick=()=>busy(save,'Menyimpan paket…',async()=>{const paket=[...list.querySelectorAll('input:checked')].map(b=>b.value);await post(r.kind==='skill'?'/api/library/paket':'/api/mcp-library/paket',{id:r.id,paket});
+    done(`✓ ${r.label} ${paket.length?'masuk paket '+paket.map(id=>paketById(id).short).join(', '):'hanya di Milik saya'}.`);await loadAgents()});
+  const cancel=el('button','secondary','Batal');cancel.type='button';cancel.onclick=()=>box.remove();const bar=el('div','import-actions');bar.append(cancel,save);box.append(bar);host.append(box)}
+function newPaketCard(){const card=el('div','paket-card paket-new paket-gray'),open=el('button','link-btn','+ Buat paket sendiri');open.type='button';
+  open.onclick=()=>{card.replaceChildren();const name=document.createElement('input');name.placeholder='Nama paket, mis. Klien Sekolah';name.maxLength=40;name.setAttribute('aria-label','Nama paket');
+    const color=document.createElement('select');color.setAttribute('aria-label','Warna paket');for(const [c,n] of Object.entries(COLOR_NAMES)){const o=el('option',null,n);o.value=c;color.append(o)}color.value='blue';
+    const save=el('button','home-create','Buat');save.type='button';save.onclick=()=>busy(save,'Membuat paket…',async()=>{const r=await post('/api/my-paket/save',{short:name.value,color:color.value});
+      collectionPaket=r.paket.id;done(`✓ Paket ${r.paket.short} dibuat. Tandai skill milik Anda lewat tombol "Paket…" di kartunya.`);await loadAgents()});
+    name.onkeydown=e=>{if(e.key==='Enter')save.click()};const cancel=el('button','secondary','Batal');cancel.type='button';cancel.onclick=()=>renderCollection();
+    const bar=el('div','import-actions');bar.append(cancel,save);card.append(name,color,bar);name.focus()};
+  card.append(open,el('small','paket-desc','Kelompokkan skill dan MCP milik Anda, misalnya per klien, per kelas, atau per proyek.'));return card}
+function deletePaket(p,btn){if(!confirm(`Hapus paket ${p.short}? Skill dan MCP di dalamnya tetap ada di "Milik saya".`))return;
+  busy(btn,`Menghapus paket ${p.short}…`,async()=>{await post('/api/my-paket/delete',{id:p.id});collectionPaket='all';done(`✓ Paket ${p.short} dihapus.`);await loadAgents()})}
+function renderHomePaths(){const host=$('#home-paths');if(!host)return;const items=allItems(),paths=(catalog.paket||[]).filter(p=>p.id!=='umum'&&(p.fit?.length||p.starter));
+  if(!paths.length){host.replaceChildren(el('p','muted','Memuat paket…'));return}
+  const found=detectedAgents();
+  host.replaceChildren(...paths.map(p=>{const own=items.filter(r=>r.paket.includes(p.id)),card=el('article','path-card paket-'+p.color),head=el('div','paket-card-head');
+    head.append(el('span','paket-icon',p.icon),el('strong',null,p.short));card.append(head,el('p','paket-desc',p.description));
+    if(p.fit?.length){const ul=el('ul','path-fit');for(const f of p.fit)ul.append(el('li',null,f));card.append(el('span','path-fit-label','Cocok jika'),ul)}
+    const sk=own.filter(r=>r.kind==='skill').length,mc=own.filter(r=>r.kind==='mcp').length;
+    card.append(el('span','paket-meta',[`${sk} skill`,mc&&`${mc} MCP`,p.author&&`oleh ${p.author}`].filter(Boolean).join(' · ')));
+    if(p.starter)card.append(el('span','paket-starter',`Setelah dipasang, mulai di chat dengan skill ${p.starter}`));
+    const on=found.map(h=>[h,own.filter(r=>agentCell(h,r.kind,r.id).on).length]).filter(([,n])=>n);
+    if(on.length)card.append(el('small','collection-active on','Terpasang di '+on.map(([h,n])=>`${h.name} (${n}/${own.length})`).join(', ')));
+    const bar=el('div','path-actions');
+    if(found.length){const sel=document.createElement('select');sel.setAttribute('aria-label','AI agent untuk paket '+p.short);for(const h of found){const o=el('option',null,h.name);o.value=h.id;sel.append(o)}
+      const install=el('button','home-create','Pasang paket');install.type='button';
+      install.onclick=()=>{const h=agents.find(x=>x.id===sel.value);bulkToggle(h,own.filter(r=>agentCell(h,r.kind,r.id).state!=='foreign'),true)};bar.append(sel,install)}
+    const view=el('button','secondary','Lihat isi');view.type='button';view.onclick=()=>{collectionPaket=p.id;go('collection');renderCollection()};bar.append(view);card.append(bar);return card}))}
+
+// ─ Tes koneksi MCP: /api/mcp/test starts the server like an agent would and lists its tools ─
+function mcpTestView(r){const box=el('div','mcp-test '+(r.ok?'ok':'bad'));
+  box.append(el('strong',null,r.ok?`✓ Terhubung${r.server?.name?` · ${r.server.name}${r.server.version?' '+r.server.version:''}`:''} · ${r.toolCount} tool · ${(r.ms/1000).toFixed(1)} dtk`:'✗ Gagal terhubung'));
+  if(!r.ok)box.append(el('p',null,r.error||''));if(r.hint)box.append(el('p','note',r.hint));
+  if(r.tools?.length){const d=el('details');d.append(el('summary',null,'Daftar tool'),el('pre',null,r.tools.map(t=>`${t.name}${t.description?' — '+t.description:''}`).join('\n')));box.append(d)}
+  if(r.log){const d=el('details');d.append(el('summary',null,'Log server'),el('pre',null,r.log));box.append(d)}
+  return box}
+function testMcp(id,host,btn){host.querySelector('.mcp-test')?.remove();const wait=el('div','mcp-test','Menjalankan server dan meminta daftar tool… (pertama kali bisa sampai 1 menit)');host.append(wait);
+  busy(btn,'Tes koneksi MCP…',async()=>{try{const r=await post('/api/mcp/test',{id});wait.replaceWith(mcpTestView(r));r.ok?done(`✓ ${r.name}: ${r.toolCount} tool siap.`):status(`${r.name}: ${r.error}`,true)}catch(e){wait.remove();throw e}})}
+
+// ─ Cek per AI agent (Cek & Tes): reload steps per agent, MCP connection tests, prompts to paste in chat ─
+const RELOAD={
+  'antigravity':['Klik <b>Cek &amp; Tes</b> di kanan atas lalu <b>Restart Antigravity</b>, atau tutup dan buka lagi Antigravity.','Buka chat Agent baru (skill dibaca saat sesi dimulai).'],
+  'claude-code':['Keluar dari sesi Claude Code (<code>/exit</code>), lalu jalankan <code>claude</code> lagi.','Ketik <code>/mcp</code> untuk melihat MCP yang tersambung.'],
+  'codex':['Tutup Codex, lalu jalankan <code>codex</code> lagi (atau buka ulang aplikasi Codex).','Ketik <code>/mcp</code> untuk melihat MCP dan tool-nya.'],
+  'gemini-cli':['Keluar (<code>/quit</code>), lalu jalankan <code>gemini</code> lagi.','Ketik <code>/mcp</code> untuk melihat status MCP.'],
+  'cursor':['<kbd>Ctrl+Shift+P</kbd> → <b>Developer: Reload Window</b>.','Buka <b>Settings → MCP</b>: titik hijau berarti server jalan.'],
+  'vscode':['<kbd>Ctrl+Shift+P</kbd> → <b>Developer: Reload Window</b>.','<kbd>Ctrl+Shift+P</kbd> → <b>MCP: List Servers</b> untuk melihat statusnya. Pakai Copilot Chat mode <b>Agent</b>.'],
+  'windsurf':['Buka panel Cascade → ikon <b>MCP</b> → <b>Refresh</b>, atau reload window.','Pastikan server tampil hijau di daftar MCP Cascade.']};
+const skillPrompt=id=>`Gunakan skill "${id}". Jelaskan singkat kapan skill ini dipakai, lalu sebutkan langkah pertamanya untuk project ini.`;
+const mcpPrompt=name=>`Sebutkan semua tool dari MCP "${name}" yang tersedia untukmu, lalu panggil satu tool yang hanya membaca data untuk membuktikan koneksinya.`;
+// The collection id behind an MCP name in an agent config, when SantriHub knows it.
+function mcpIdFor(name){if(name==='santrihub')return GATEWAY_ID;
+  return catalog.mcpServers.some(m=>m.id===name)||myMcp.some(m=>m.id===name)?name:null}
+async function copyText(text,btn){try{await navigator.clipboard.writeText(text);const old=btn.textContent;btn.textContent='Tersalin ✓';setTimeout(()=>{btn.textContent=old},1400)}catch{const host=btn.closest('li')||btn.parentElement;host.querySelector('.copy-manual')?.remove();const pre=el('pre','copy-manual',text);host.append(pre);getSelection().selectAllChildren(pre);status('Clipboard diblokir: teks sudah diseleksi, tekan Ctrl+C.',true)}}
+function renderAgentChecks(){const host=$('#agent-checks');if(!host)return;const found=detectedAgents();
+  if(!agents.length){host.replaceChildren(el('p','muted','AI agent belum dimuat.'));return}
+  if(!found.length){host.replaceChildren(el('p','muted','Belum ada AI agent terdeteksi di komputer ini.'));return}
+  host.replaceChildren(...found.map(h=>{const card=el('article','agent-check'),head=el('div','agent-check-head');
+    const mine=h.skills.filter(s=>s.managed).map(s=>s.id),others=h.skills.filter(s=>!s.managed).map(s=>s.id);
+    head.append(el('strong',null,h.name),el('span','pill '+(mine.length||h.mcp.names.length?'ok':''),`${h.skills.length} skill · ${h.mcp.names.length} MCP`));card.append(head);
+    if(h.mcp.valid===false)card.append(el('p','agent-check-warn','Config MCP agent ini tidak bisa dibaca (JSON/TOML rusak). Perbaiki file-nya dulu: '+h.mcp.file));
+    const steps=el('ol','agent-check-steps');for(const s of RELOAD[h.id]||[`Reload ${h.name}.`]){const li=el('li');li.innerHTML=s;steps.append(li)}
+    const reload=el('div','agent-check-block');reload.append(el('span','agent-check-label','Muat ulang agent'),steps);
+    if(h.id==='antigravity'){const b=el('button','secondary','Buka Cek & Tes Antigravity');b.type='button';b.onclick=()=>$('#check-test').click();reload.append(b)}
+    const items=el('div','agent-check-block');items.append(el('span','agent-check-label','Tes & prompt uji'));
+    const list=el('ul','agent-check-items');
+    for(const name of h.mcp.names){const li=el('li','agent-check-item'),id=mcpIdFor(name);li.append(el('span','agent-kind mcp','MCP'),el('span','agent-check-name',name));
+      const acts=el('span','agent-check-actions');
+      if(id){const t=el('button','secondary','Tes koneksi');t.type='button';t.onclick=()=>testMcp(id,li,t);acts.append(t)}
+      else acts.append(el('small','muted','bukan dari SantriHub'));
+      const c=el('button','secondary','Salin prompt');c.type='button';c.onclick=()=>copyText(mcpPrompt(name),c);acts.append(c);li.append(acts);list.append(li)}
+    for(const id of [...mine,...others]){const li=el('li','agent-check-item');li.append(el('span','agent-kind skill'+(mine.includes(id)?'':' mine'),'SKILL'),el('span','agent-check-name',id+(mine.includes(id)?'':' (milik Anda)')));
+      const acts=el('span','agent-check-actions'),c=el('button','secondary','Salin prompt');c.type='button';c.onclick=()=>copyText(skillPrompt(id),c);acts.append(c);li.append(acts);list.append(li)}
+    if(!list.children.length){const empty=el('li','muted','Belum ada skill atau MCP di agent ini. ');const a=el('button','secondary','Aktifkan dulu →');a.type='button';a.onclick=()=>go('agents');empty.append(a);list.append(empty)}
+    items.append(list);card.append(reload,items);return card}))}
+$('#agent-checks-refresh').onclick=()=>busy($('#agent-checks-refresh'),'Mendeteksi AI agent…',loadAgents);
+
+// ─ Tur singkat: 5 slides over the 4-step flow; shown once per browser, replay from Beranda or the profile menu ─
+const TOUR_KEY='santrihub-tour-v1';
+const TOUR=[
+  {page:'home',title:'Selamat datang di SantriHub',text:'Satu tempat untuk mengelola skill dan MCP semua AI agent Anda: Claude Code, Codex, Antigravity, Gemini CLI, Cursor, VS Code, dan Windsurf.',points:['Pilih jalur proyek di Beranda: paket Apps Script atau Monorepo, lalu pasang sekali klik.','Ikuti 4 langkah di sidebar, dari atas ke bawah.','Beranda selalu menunjukkan langkah berikutnya ("Mulai di sini").']},
+  {page:'add',title:'1 · Tambah',text:'Masukkan skill dan MCP dari mana saja.',points:['Tarik banyak ZIP, folder, atau file .md sekaligus. SKILL.md dibuat otomatis bila belum ada.','Tempel config MCP, perintah npx/uvx, atau URL MCP.','Atau ambil dari katalog premium dan GitHub.']},
+  {page:'collection',title:'2 · Koleksi',text:'Semua yang Anda tambahkan berkumpul di sini, bersama katalog premium Santriverse.',points:['Lihat di agent mana tiap item sudah aktif.','Tombol "Tes koneksi" langsung menjalankan MCP untuk memastikan ia bekerja.']},
+  {page:'agents',title:'3 · Aktifkan',text:'Pilih skill dan MCP untuk tiap AI agent dengan mencentang tabel.',points:['SantriHub hanya menyentuh file buatannya sendiri; config Anda yang lain aman.','Pakai Gateway untuk banyak MCP lewat satu entri, atau Profil untuk menyalin set ke agent lain.']},
+  {page:'status',title:'4 · Cek & Tes',text:'Pastikan semuanya benar-benar terbaca oleh AI agent.',points:['Tes koneksi MCP, lalu ikuti cara memuat ulang agent.','Salin prompt uji dan tempel di chat agent untuk membuktikannya.']}];
+let tourIndex=0;const tour=$('#tour');
+function tourStorage(fn){try{return fn(localStorage)}catch{return null}}
+function showTourStep(){const s=TOUR[tourIndex];$('#tour-step').textContent=`${tourIndex+1} / ${TOUR.length}`;$('#tour-title').textContent=s.title;$('#tour-text').textContent=s.text;
+  $('#tour-points').replaceChildren(...s.points.map(p=>el('li',null,p)));$('#tour-dots').replaceChildren(...TOUR.map((_,i)=>el('i',i===tourIndex?'on':'')));
+  show($('#tour-back'),tourIndex>0);$('#tour-next').textContent=tourIndex===TOUR.length-1?'Mulai dari langkah 1 →':'Lanjut';
+  go(s.page);$$('.tour-focus').forEach(b=>b.classList.remove('tour-focus'));$$(`.nav-step[data-page="${s.page}"],.rail-step[data-rail-page="${s.page}"]`).forEach(b=>b.classList.add('tour-focus'))}
+function openTour(){tourIndex=0;if(!tour.open)tour.showModal();showTourStep();$('#tour-next').focus()}
+function closeTour(){tourStorage(s=>s.setItem(TOUR_KEY,'done'));$$('.tour-focus').forEach(b=>b.classList.remove('tour-focus'));if(tour.open)tour.close()}
+const tourSeen=()=>tourStorage(s=>s.getItem(TOUR_KEY))==='done';
+function maybeTour(){if(!tourSeen()&&!$('#locked').open)setTimeout(()=>{if(!tourSeen()&&!document.querySelector('dialog[open]'))openTour()},600)}
+$('#tour-next').onclick=()=>{if(tourIndex<TOUR.length-1){tourIndex++;showTourStep()}else{closeTour();go('add')}};
+$('#tour-back').onclick=()=>{if(tourIndex>0){tourIndex--;showTourStep()}};
+$('#tour-skip').onclick=closeTour;tour.addEventListener('cancel',e=>{e.preventDefault();closeTour()});
+$('#home-tour').onclick=openTour;$('#tour-replay').onclick=()=>{closeProfile();openTour()};
+
+// ─ Impor pintar: drop ZIP / folder / files, paste MCP, preview everything, save and activate ─
+let importQueue=[],importPreview=null;
+const JUNK=/(^|\/)(node_modules|\.git|__MACOSX)\/|(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini)$/i;
+const fmtSize=n=>n>1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';
+function queueFiles(list){for(const {path,file} of list){const p=path.replace(/\\/g,'/').replace(/^\/+/,'');if(!p||JUNK.test(p)||importQueue.some(q=>q.path===p))continue;importQueue.push({path:p,file})}renderQueue()}
+function renderQueue(){const host=$('#import-queue');show(host,importQueue.length>0);if(!importQueue.length){host.replaceChildren();return}
+  const total=importQueue.reduce((n,q)=>n+q.file.size,0),zips=importQueue.filter(q=>/\.zip$/i.test(q.path)).length,tops=new Set(importQueue.filter(q=>q.path.includes('/')).map(q=>q.path.split('/')[0]));
+  const head=el('div','queue-head');head.append(el('strong',null,`${importQueue.length} file siap dipindai`),el('small','muted',[zips&&`${zips} ZIP`,tops.size&&`${tops.size} folder`,fmtSize(total)].filter(Boolean).join(' · ')));
+  const clear=el('button','secondary','Kosongkan');clear.type='button';clear.onclick=()=>{importQueue=[];renderQueue()};head.append(clear);
+  const chips=el('div','queue-chips');const groups=new Map();for(const q of importQueue){const k=q.path.includes('/')?q.path.split('/')[0]+'/':q.path;groups.set(k,(groups.get(k)||0)+1)}
+  for(const [k,n] of groups){const c=el('span','queue-chip',n>1?`${k} (${n})`:k);const x=el('button',null,'×');x.type='button';x.setAttribute('aria-label','Hapus '+k);x.onclick=()=>{importQueue=importQueue.filter(q=>(q.path.includes('/')?q.path.split('/')[0]+'/':q.path)!==k);renderQueue()};c.append(x);chips.append(c)}
+  host.replaceChildren(head,chips)}
+// Folders dropped from Explorer/Finder arrive as entries; read them recursively.
+async function walkEntry(entry,prefix=''){if(entry.isFile)return [{path:prefix+entry.name,file:await new Promise((ok,no)=>entry.file(ok,no))}];
+  if(!entry.isDirectory)return [];const reader=entry.createReader(),out=[];let batch;
+  do{batch=await new Promise((ok,no)=>reader.readEntries(ok,no));for(const e of batch)out.push(...await walkEntry(e,prefix+entry.name+'/'))}while(batch.length);return out}
+const dropZone=$('#drop-zone');
+['dragenter','dragover'].forEach(t=>dropZone.addEventListener(t,e=>{e.preventDefault();dropZone.classList.add('over')}));
+['dragleave','drop'].forEach(t=>dropZone.addEventListener(t,()=>dropZone.classList.remove('over')));
+dropZone.addEventListener('drop',async e=>{e.preventDefault();const entries=[...e.dataTransfer.items||[]].map(i=>i.webkitGetAsEntry&&i.webkitGetAsEntry()).filter(Boolean);
+  try{if(entries.length){const all=[];for(const en of entries)all.push(...await walkEntry(en));queueFiles(all)}else queueFiles([...e.dataTransfer.files].map(f=>({path:f.name,file:f})))}catch(err){fail(err)}});
+dropZone.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('#import-files').click()}});
+$('#import-files').onchange=e=>{queueFiles([...e.target.files].map(f=>({path:f.name,file:f})));e.target.value=''};
+$('#import-folder').onchange=e=>{queueFiles([...e.target.files].map(f=>({path:f.webkitRelativePath||f.name,file:f})));e.target.value=''};
+const toBase64=file=>new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(String(r.result).replace(/^data:[^,]*,/,''));r.onerror=()=>no(new Error(`${file.name} tidak bisa dibaca.`));r.readAsDataURL(file)});
+$('#import-scan').onclick=()=>busy($('#import-scan'),'Memindai file…',async()=>{
+  const mcpText=$('#import-mcp-text').value;if(!importQueue.length&&!mcpText.trim())throw new Error('Tarik file/ZIP/folder dulu, atau tempel MCP.');
+  const total=importQueue.reduce((n,q)=>n+q.file.size,0);if(total>40*1048576)throw new Error(`Total ${fmtSize(total)} melebihi 40 MB. Impor sebagian dulu.`);
+  // Big non-ZIP files are never skills; leave them out instead of uploading them.
+  const send=importQueue.filter(q=>/\.zip$/i.test(q.path)||q.file.size<=512*1024),left=importQueue.filter(q=>!send.includes(q));
+  const items=[];for(const q of send)items.push({path:q.path,data:await toBase64(q.file)});
+  importPreview=await post('/api/library/upload/preview',{items,mcpText,includeScripts:$('#import-scripts').checked});
+  if(left.length)importPreview.problems.push({source:`${left.length} file besar`,error:'Dilewati (> 512 KB, bukan ZIP): '+left.map(q=>q.path).slice(0,5).join(', ')});
+  renderImport();const n=importPreview.skills.length,m=importPreview.mcp.length;done(n||m?`✓ Ditemukan ${n} skill dan ${m} MCP. Periksa lalu simpan.`:'Tidak ada skill atau MCP yang dikenali.')});
+function renderImport(){const host=$('#import-results'),p=importPreview;show(host,Boolean(p));if(!p){host.replaceChildren();return}
+  const parts=[];
+  if(p.problems.length){const box=el('div','import-problems');box.append(el('strong',null,'Perlu perhatian'));const ul=el('ul');for(const x of p.problems)ul.append(el('li',null,`${x.source}: ${x.error}`));box.append(ul);parts.push(box)}
+  const pill=(t,c='')=>el('span','pill '+c,t);
+  if(p.skills.length){parts.push(el('h3',null,`Skill (${p.skills.length})`));
+    for(const s of p.skills){const row=el('article','import-row');row.dataset.key=s.key;row.dataset.kind='skill';
+      const top=el('label','import-row-head'),box=document.createElement('input');box.type='checkbox';box.className='import-pick';box.checked=s.exists!=='catalog';top.append(box,el('strong',null,s.id),pill(s.source));
+      if(s.generated)top.append(pill('SKILL.md DIBUAT OTOMATIS','premium'));if(s.repaired)top.append(pill('FRONTMATTER DIPERBAIKI'));
+      if(s.exists)top.append(pill(s.exists==='catalog'?'ID DIPAKAI KATALOG':'SUDAH ADA DI KOLEKSI','warn'));row.append(top);
+      const grid=el('div','import-fields');const id=el('label',null,'ID skill'),idIn=document.createElement('input');idIn.className='import-id';idIn.value=s.id;id.append(idIn);
+      const desc=el('label',null,'Deskripsi (kapan agent memakainya)'),dIn=document.createElement('input');dIn.className='import-desc';dIn.value=s.description;desc.append(dIn);grid.append(id,desc);row.append(grid);
+      row.append(el('small','muted',`${s.files.length} file pendukung${s.skipped.length?` · ${s.skipped.length} dilewati`:''}`));
+      if(s.skipped.length){const d=el('details');d.append(el('summary',null,'File yang dilewati'),el('pre',null,s.skipped.join('\n')));row.append(d)}
+      const md=el('details');md.append(el('summary',null,'Lihat SKILL.md'),el('pre',null,s.skillMd));row.append(md);parts.push(row)}}
+  if(p.mcp.length){parts.push(el('h3',null,`MCP (${p.mcp.length})`));
+    for(const m of p.mcp){const row=el('article','import-row');row.dataset.key=m.key;row.dataset.kind='mcp';
+      const top=el('label','import-row-head'),box=document.createElement('input');box.type='checkbox';box.className='import-pick';box.checked=m.exists!=='catalog';top.append(box,el('strong',null,m.name),pill(m.kind==='http'?'URL':'COMMAND'));
+      if(m.envKeys.length)top.append(pill('ENV: '+m.envKeys.join(', ')));if(m.exists)top.append(pill(m.exists==='catalog'?'NAMA DIPAKAI KATALOG':'SUDAH ADA','warn'));row.append(top);
+      const grid=el('div','import-fields');const n=el('label',null,'Nama MCP di config agent'),nIn=document.createElement('input');nIn.className='import-id';nIn.value=m.name;n.append(nIn);grid.append(n,el('code','import-summary',m.summary));row.append(grid);
+      row.append(el('small','muted','Dari '+m.from));parts.push(row)}}
+  if(p.skills.length||p.mcp.length){const act=el('div','import-activate');act.append(el('strong',null,'Langsung aktifkan di (opsional)'));
+    const found=detectedAgents();const list=el('div','import-agents');
+    for(const h of found){const l=el('label','check-line'),b=document.createElement('input');b.type='checkbox';b.value=h.id;b.className='import-agent';l.append(b,document.createTextNode(' '+h.name));list.append(l)}
+    if(!found.length)list.append(el('span','muted','Belum ada AI agent terdeteksi. Simpan dulu, aktifkan nanti di langkah 3.'));act.append(list);
+    {const l=el('label','import-paket-line');l.append(document.createTextNode('Masukkan juga ke paket '));const sel=document.createElement('select');sel.className='import-paket';
+      sel.append(Object.assign(el('option',null,'Hanya Milik saya'),{value:''}));for(const x of paketList().filter(x=>x.id!=='mine'))sel.append(Object.assign(el('option',null,x.short),{value:x.id}));l.append(sel);act.append(l)}
+    if(p.skills.some(s=>s.exists==='library')||p.mcp.some(m=>m.exists==='mine')){const l=el('label','check-line'),b=document.createElement('input');b.type='checkbox';b.id='import-overwrite';l.append(b,document.createTextNode(' Timpa yang sudah ada di koleksi'));act.append(l)}
+    const save=el('button','home-create','Simpan ke Koleksi');save.type='button';save.onclick=()=>saveImport(save);const cancel=el('button','secondary','Batal');cancel.type='button';cancel.onclick=()=>{importPreview=null;renderImport()};
+    const bar=el('div','import-actions');bar.append(cancel,save);act.append(bar);parts.push(act)}
+  host.replaceChildren(...parts)}
+function saveImport(btn){busy(btn,'Menyimpan ke koleksi…',async()=>{const rows=$$('#import-results .import-row').filter(r=>r.querySelector('.import-pick').checked);
+  const picks=rows.filter(r=>r.dataset.kind==='skill').map(r=>({key:r.dataset.key,id:r.querySelector('.import-id').value.trim(),description:r.querySelector('.import-desc').value.trim()}));
+  const mcpPicks=rows.filter(r=>r.dataset.kind==='mcp').map(r=>({key:r.dataset.key,name:r.querySelector('.import-id').value.trim()}));
+  if(!picks.length&&!mcpPicks.length)throw new Error('Centang minimal satu skill atau MCP.');
+  const r=await post('/api/library/upload/save',{previewId:importPreview.previewId,picks,mcpPicks,overwrite:document.getElementById('import-overwrite')?.checked===true,paket:document.querySelector('.import-paket')?.value?[document.querySelector('.import-paket').value]:[]});
+  // Optional: turn everything on in the chosen agents right away.
+  const targets=$$('.import-agent').filter(b=>b.checked).map(b=>agents.find(h=>h.id===b.value)).filter(Boolean),failed=[];let on=0;
+  for(const h of targets){for(const id of r.saved){status(`Mengaktifkan ${id} di ${h.name}…`);try{await post('/api/harnesses/skill',{harness:h.id,id,enable:true});on++}catch(e){failed.push(`${id} @ ${h.name}: ${e.message}`)}}
+    for(const id of r.savedMcp){status(`Mengaktifkan MCP ${id} di ${h.name}…`);try{await post('/api/harnesses/mcp',{harness:h.id,id,enable:true});on++}catch(e){failed.push(`${id} @ ${h.name}: ${e.message}`)}}}
+  importPreview=null;importQueue=[];$('#import-mcp-text').value='';renderQueue();await loadAgents();
+  const host=$('#import-results');show(host);const ok=el('div','import-done');
+  ok.append(el('strong',null,`✓ ${r.saved.length} skill dan ${r.savedMcp.length} MCP masuk Koleksi${on?`, ${on} aktivasi berhasil`:''}.`));
+  if(failed.length){const ul=el('ul','import-problems');for(const f of failed)ul.append(el('li',null,f));ok.append(ul)}
+  if(targets.length)ok.append(el('p','note',`Reload ${targets.map(h=>h.name).join(', ')} agar skill/MCP baru terbaca, lalu coba di chat (langkah 4).`));
+  const bar=el('div','import-actions');const a=el('button','secondary','Lihat di Koleksi');a.type='button';a.onclick=()=>go('collection');
+  const b=el('button','home-create',targets.length?'Lanjut: 4 · Cek & Tes →':'Lanjut: 3 · Aktifkan →');b.type='button';b.onclick=()=>go(targets.length?'status':'agents');bar.append(a,b);ok.append(bar);host.replaceChildren(ok);
+  done(`✓ Impor selesai: ${r.saved.length} skill, ${r.savedMcp.length} MCP.`)})}
+
 // ─ Update: /api/update compares this build with the latest GitHub release ─
 let updateInfo=null;
 const updateDialog=$('#update-dialog');
@@ -148,8 +444,8 @@ checkUpdate();
 
 // ─ Navigation ─
 function go(page){if(!PAGES[page])page='home';$$('[data-page]').forEach(b=>b.dataset.page===page?b.setAttribute('aria-current','page'):b.removeAttribute('aria-current'));
-  Object.keys(PAGES).forEach(p=>show($('#page-'+p),p===page));$('#crumb').textContent='Workspace / '+PAGES[page];
-  if(location.hash!=='#'+page)history.replaceState(null,'','#'+page);closeNav();syncFx(page);stopStatusPoll();if(page==='status'&&csrf){loadStatus();loadTargets()}if(page==='repos'&&csrf)loadRepos();if(page==='extensions')loadExtensions();if(page==='agents'&&csrf)loadAgents();if(page==='library'&&csrf)loadLibrary()}
+  Object.keys(PAGES).forEach(p=>show($('#page-'+p),p===page));$('#crumb').textContent='SantriHub / '+PAGES[page];
+  if(location.hash!=='#'+page)history.replaceState(null,'','#'+page);closeNav();syncFx(page);stopStatusPoll();if(page==='status'&&csrf){loadStatus();loadTargets()}if(page==='repos'&&csrf)loadRepos();if(page==='extensions')loadExtensions();if(['agents','home','collection','status'].includes(page)&&csrf)loadAgents();if(page==='library'&&csrf)loadLibrary()}
 $$('[data-page]').forEach(b=>b.onclick=()=>go(b.dataset.page));
 $$('[data-rail-page]').forEach(b=>b.onclick=()=>{document.body.classList.remove('rail');go(b.dataset.railPage)});
 $$('[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));
@@ -185,8 +481,8 @@ async function checkSession(){try{const data=await getJson('/api/auth/status');c
 function showMember(u){const name=(u&&u.name)||'Member',email=(u&&u.email)||'Premium aktif',initial=(name.trim()[0]||'?').toUpperCase();
   $('#identity').textContent=name;$('#identity-sub').textContent=email;$('#menu-name').textContent=name;$('#menu-email').textContent=email;
   $('#avatar').textContent=initial;$('#menu-avatar').textContent=initial;$('.rail-avatar').textContent=initial;
-  typewriter($('#home-greeting'),[`Selamat datang, ${name.split(' ')[0]}.`,`Siap memasang skill, ${name.split(' ')[0]}?`,'Skills + MCP untuk Antigravity.']);
-  show($('#account'));$('#locked').close();document.body.classList.remove('auth-locked');show($('#content'));syncFx(location.hash.slice(1)||'home');status('Premium aktif. Katalog siap.')}
+  typewriter($('#home-greeting'),[`Selamat datang, ${name.split(' ')[0]}.`,`Siap memasang skill, ${name.split(' ')[0]}?`,'Skill & MCP untuk semua AI agent.']);
+  show($('#account'));$('#locked').close();document.body.classList.remove('auth-locked');show($('#content'));syncFx(location.hash.slice(1)||'home');status('Premium aktif. Katalog siap.');maybeTour()}
 function closeCheckDialog(dialog,value='cancel'){if(!dialog.open||dialog.classList.contains('dialog-closing'))return;if(matchMedia('(prefers-reduced-motion: reduce)').matches){dialog.close(value);return}dialog.classList.add('dialog-closing');setTimeout(()=>{dialog.classList.remove('dialog-closing');if(dialog.open)dialog.close(value)},400)}
 function closeCheck(){stopCheckPoll();checkEpoch++;checkRequest?.abort();checkRequest=null;checkBusy=false;for(const id of ['#restart-confirm','#force-confirm']){const d=$(id);d.returnValue='cancel';if(d.open)d.close()}const d=$('#check-panel');if(d.open)closeCheckDialog(d,'cancel')}
 function showLocked(){stopStatusPoll();if($('#advanced-status').open)$('#advanced-status').close();if($('#repo-modal').open)$('#repo-modal').close();resetGithub();savedRepos=[];$('#saved-repos').replaceChildren();closeCheck();resetLocalSkills();resetLocalMcp();csrf='';lastStatus=null;selectedSkills.clear();activity.length=0;catalog={skills:[],mcpServers:[]};renderActivity();closeProfile();document.body.classList.add('auth-locked');if(!$('#locked').open)$('#locked').showModal();show($('#account'),false);show($('#content'));syncFx('');status('Login untuk mengakses katalog premium.')}
@@ -220,11 +516,11 @@ function closeCatalogConfirm(confirmed=false){
 $('#catalog-confirm-cancel').onclick=()=>closeCatalogConfirm();$('#catalog-confirm-submit').onclick=()=>closeCatalogConfirm(true);
 catalogDialog.addEventListener('keydown',e=>{if(catalogConfirm.hidden)return;if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closeCatalogConfirm()}else if(e.key==='Tab'){e.preventDefault();const buttons=[$('#catalog-confirm-cancel'),$('#catalog-confirm-submit')];buttons[(buttons.indexOf(document.activeElement)+(e.shiftKey?-1:1)+2)%2].focus()}});
 function catalogRows(){return catalogKind==='skills'?catalog.skills:catalog.mcpServers}
-function catalogSource(row){return row.source||'Lainnya'}
+function catalogSource(row){return row.paket?row.paket.map(id=>paketById(id).short).join(', '):row.source?paketById(row.source).short:'Lainnya'}
 function catalogCount(){const n=selectedSkills.size;$('#catalog-count').textContent=`${n} dipilih`;$('#catalog-install').textContent=(catalogKind==='skills'?'Install terpilih':'Daftarkan terpilih')+` (${n})`;$('#catalog-install').disabled=catalogBusy||!n}
 function renderCategories(){const values=['Semua',...new Set(catalogRows().map(catalogSource))];$('#catalog-categories').replaceChildren(...values.map(value=>{const button=document.createElement('button');button.type='button';button.className='catalog-category';button.textContent=value;button.setAttribute('aria-pressed',String(catalogCategory===value));button.onclick=()=>{catalogCategory=value;renderCategories();renderCatalog()};return button}))}
 function renderCatalog(){if(!catalogDialog.open)return;const q=$('#catalog-search').value.trim().toLowerCase(),installed=new Set(catalogKind==='skills'?(lastStatus?.skills||[]).map(row=>row.id):(lastStatus?.mcp.servers||[]).map(row=>row.name));const rows=catalogRows().filter(row=>!installed.has(catalogKind==='mcp'&&row.builtin?'santri-skills':row.id)&&(catalogCategory==='Semua'||catalogSource(row)===catalogCategory)&&`${row.id} ${row.label||''} ${row.description||''} ${catalogSource(row)}`.toLowerCase().includes(q));
-  $('#catalog-items').replaceChildren(...rows.map(row=>{const card=document.createElement('label');card.className='catalog-card';const input=document.createElement('input');input.type='checkbox';input.value=row.id;input.setAttribute('aria-label',`Pilih ${row.label||row.id}`);input.checked=selectedSkills.has(row.id);input.onchange=()=>{input.checked?selectedSkills.add(row.id):selectedSkills.delete(row.id);catalogCount()};card.innerHTML=`<strong>${esc(row.label||row.id)}</strong><span class="pill">${esc(catalogSource(row))}</span><small>${esc(row.description)}</small>`;card.prepend(input);return card}));
+  $('#catalog-items').replaceChildren(...rows.map(row=>{const card=document.createElement('label');card.className='catalog-card';const input=document.createElement('input');input.type='checkbox';input.value=row.id;input.setAttribute('aria-label',`Pilih ${row.label||row.id}`);input.checked=selectedSkills.has(row.id);input.onchange=()=>{input.checked?selectedSkills.add(row.id):selectedSkills.delete(row.id);catalogCount()};card.innerHTML=`<strong>${esc(row.label||row.id)}</strong><span class="pill paket paket-${paketById(row.paket?row.paket[0]:row.source).color}">${esc(catalogSource(row))}</span><small>${esc(row.description)}</small>`;card.prepend(input);return card}));
   if(!rows.length)$('#catalog-items').textContent=q||catalogCategory!=='Semua'?'Tidak ada kandidat yang cocok.':'Semua item katalog sudah terpasang.';catalogCount()}
 function renderSkills(){if(catalogDialog.open&&catalogKind==='skills')renderCatalog()}
 function renderMcp(){if(catalogDialog.open&&catalogKind==='mcp')renderCatalog()}
@@ -237,8 +533,7 @@ catalogDialog.addEventListener('close',()=>{selectedSkills.clear();catalogTrigge
 $('#catalog-search').addEventListener('input',renderCatalog);
 $('#search').addEventListener('input',()=>window.renderInstalled?.());
 $('#mcp-search').addEventListener('input',()=>window.renderInstalled?.());
-$('#side-search').addEventListener('change',e=>openCatalog('skills',e.target.value));
-$('#home-search').addEventListener('change',e=>openCatalog('skills',e.target.value));
+for(const id of ['#side-search','#home-search'])$(id).addEventListener('change',e=>{$('#collection-search').value=e.target.value;e.target.value='';go('collection');renderCollection()});
 $('#catalog-install').onclick=async()=>{if(catalogBusy||catalogConfirmation)return;const ids=[...selectedSkills];if(!ids.length)return status('Pilih minimal satu item.',true);if(!await confirmCatalog(ids))return;
   catalogBusy=true;catalogDialog.setAttribute('aria-busy','true');$('#catalog-install').disabled=true;$('#catalog-close').disabled=true;$('#catalog-cancel').disabled=true;
   busy($('#catalog-install'),'Memasang pilihan…',async()=>{try{if(catalogKind==='skills'){const r=await post('/api/install',{scope:scope(),skillIds:ids,confirmGlobal:true});done(`✓ ${r.installed} salinan terpasang, ${r.skipped} dilewati (${scope()}). Reload Antigravity.`)}else{for(const id of ids){const r=await post('/api/mcp',{scope:scope(),id,confirm:true,confirmGlobal:true});done('✓ '+r.message)}await loadTargets()}await loadStatus();catalogBusy=false;closeCatalog()}finally{catalogBusy=false;catalogDialog.setAttribute('aria-busy','false');$('#catalog-close').disabled=false;$('#catalog-cancel').disabled=false}})};
@@ -460,6 +755,6 @@ $('#install-local-mcp').onclick=()=>{const names=$$('#local-mcp-results input:ch
 // ─ Catalog ─
 async function loadCatalog(){show($('#progress'));status('Memuat katalog…');
   try{catalog=await getJson('/api/catalog');$('#workspace').textContent=catalog.cwd;$('#stat-skills').textContent=catalog.skills.length;$('#stat-mcp').textContent=catalog.mcpServers.length;
-  renderSkills();renderMcp();renderSources();if(location.hash==='#repos')await loadRepos();if(location.hash==='#agents')await loadAgents();if(location.hash==='#library')await loadLibrary();await loadTargets();done(`✓ ${catalog.skills.length} skill, ${catalog.mcpServers.length} MCP.`);await loadStatus()}catch(e){fail(e)}finally{show($('#progress'),false)}}
+  renderSkills();renderMcp();renderSources();if(location.hash==='#repos')await loadRepos();await loadAgents();if(location.hash==='#library')renderLibrary();await loadTargets();done(`✓ ${catalog.skills.length} skill, ${catalog.mcpServers.length} MCP.`);await loadStatus()}catch(e){fail(e)}finally{show($('#progress'),false)}}
 
 (async()=>{renderActivity();go(location.hash.slice(1)||'home');if(await checkSession()){log('Login terverifikasi.');await loadCatalog()}else showLocked()})();

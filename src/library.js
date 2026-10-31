@@ -109,66 +109,97 @@ async function downloadArchive(src, want, fetcher) {
   throw new Error('Repository tidak bisa diunduh.');
 }
 
-/**
- * Skills found in a public GitHub repo, ready for the member to review and save.
- * Each: { key, id, description, generated, repaired, skillMd, files: [{rel,data}], skipped: [rel] }.
- */
-async function scanGithub(url, { fetcher = globalThis.fetch, includeScripts = false } = {}) {
-  const src = parseIngestUrl(url);
-  const within = (rel) => (src.subdir && rel.startsWith(src.subdir + '/') ? rel.slice(src.subdir.length + 1) : rel);
-  // Pass 1: where are the SKILL.md files, and which root instruction files exist.
-  const isCandidate = (rel) => !within(rel).includes('/') && (CANDIDATES.includes(within(rel)) || /\.md$/i.test(within(rel)));
-  const NOTHING = 'Repository tidak punya SKILL.md maupun file Markdown di root untuk dijadikan skill.';
-  const first = await downloadArchive(src, (rel) => (relevantSkill(rel) && !hiddenOrVendored(rel)) || isCandidate(rel), fetcher)
-    .catch((e) => { throw /tidak punya artefak relevan/.test(e.message) ? new Error(NOTHING) : e; });
-  const skillDirs = [...first.files.keys()].filter((rel) => relevantSkill(rel) && !hiddenOrVendored(rel)).map((rel) => path.posix.dirname(rel)).sort();
+const skillRoots = (rels) => {
+  const dirs = rels.filter((rel) => relevantSkill(rel) && !hiddenOrVendored(rel)).map((rel) => path.posix.dirname(rel)).sort();
   // A SKILL.md inside another skill's folder belongs to that skill (its examples), not a new skill.
   // (A root SKILL.md next to skills/<x>/SKILL.md: both are skills.)
-  const roots = skillDirs.filter((d) => !skillDirs.some((o) => o !== d && o !== '.' && d.startsWith(o + '/')));
-  if (roots.length > MAX_SKILLS) throw new Error(`Repository berisi ${roots.length} skill (maks ${MAX_SKILLS}). Pakai URL /tree/<branch>/<folder> untuk memilih sebagian.`);
-  const repoName = src.subdir ? src.subdir.split('/').pop() : src.repo.split('/')[1];
-  const skills = [];
+  return dirs.filter((d) => !dirs.some((o) => o !== d && o !== '.' && d.startsWith(o + '/')));
+};
+const isRootDoc = (rel) => !rel.includes('/') && (CANDIDATES.includes(rel) || /\.(md|markdown|mdx)$/i.test(rel));
+const NOTHING = 'tidak punya SKILL.md maupun file Markdown untuk dijadikan skill.';
 
+/**
+ * Skills in a set of files (a GitHub folder, an uploaded ZIP, folder or file), paths relative
+ * to the source root: every folder with a SKILL.md or, when there is none, one skill generated
+ * from the root instructions (AGENTS.md, CLAUDE.md, README.md, any .md).
+ * Each: { key, id, description, generated, repaired, skillMd, files: [{rel,data}], skipped, sourceHash }.
+ * `name`: id fallback; `label`: where it came from, for descriptions; `origin`: shown in a generated SKILL.md.
+ */
+function scanFiles(files, { name, label, origin = label, includeScripts = false, oversized = [], tooMany = '', maxSkills = MAX_SKILLS }) {
+  const rels = [...files.keys()];
+  const roots = skillRoots(rels);
+  if (roots.length > maxSkills) throw new Error(`${label} berisi ${roots.length} skill (maks ${maxSkills}).${tooMany}`);
+  const skills = [];
   if (roots.length) {
-    // Pass 2: the full folders of those skills (text files; scripts only on request).
     // Deepest skill folder holding `rel` (a root SKILL.md does not swallow nested skills).
     const under = (rel) => roots.filter((d) => d === '.' || rel.startsWith(d + '/')).sort((a, b) => b.length - a.length)[0];
-    const second = await downloadArchive({ ...src, branch: first.branch }, (rel) => Boolean(under(rel)) && !hiddenOrVendored(rel) && (TEXT_EXT.test(rel) || SCRIPT_EXT.test(rel)), fetcher);
     for (const dir of roots) {
-      const files = [];
-      const skipped = second.oversized.filter((rel) => under(rel) === dir).map((rel) => `${dir === '.' ? rel : rel.slice(dir.length + 1)} (> 512 KB)`);
-      for (const [rel, data] of second.files) {
-        if (under(rel) !== dir) continue;
-        const inner = dir === '.' ? rel : rel.slice(dir.length + 1);
+      const inside = (rel) => (dir === '.' ? rel : rel.slice(dir.length + 1));
+      const own = [], skipped = oversized.filter((rel) => under(rel) === dir).map((rel) => `${inside(rel)} (> 512 KB)`);
+      for (const [rel, data] of files) {
+        if (under(rel) !== dir || hiddenOrVendored(rel)) continue;
+        const inner = inside(rel);
+        if (!TEXT_EXT.test(inner) && !SCRIPT_EXT.test(inner)) { skipped.push(`${inner} (bukan file teks)`); continue; }
         if (!validRel(inner)) { skipped.push(inner); continue; }
         if (SCRIPT_EXT.test(inner) && !includeScripts) { skipped.push(inner); continue; }
-        files.push({ rel: inner, data });
+        own.push({ rel: inner, data });
       }
-      const original = (files.find((f) => f.rel === 'SKILL.md') || { data: first.files.get(dir === '.' ? 'SKILL.md' : `${dir}/SKILL.md`) }).data.toString('utf8');
+      const original = files.get(dir === '.' ? 'SKILL.md' : `${dir}/SKILL.md`).toString('utf8');
       const meta = readFrontmatter(original);
-      const id = slug(meta.name || (dir === '.' ? repoName : path.posix.basename(dir)));
-      const description = String(meta.description || summarize(original) || `Skill dari ${src.repo}`).slice(0, 1024);
+      const id = slug(meta.name || (dir === '.' ? name : path.posix.basename(dir)));
+      const description = String(meta.description || summarize(original) || `Skill dari ${label}`).slice(0, 1024);
       const repaired = !meta.name || !meta.description || meta.name !== id;
       skills.push({ key: dir, id, description, generated: false, repaired, skillMd: withFrontmatter(original, { name: id, description }),
-        files: files.filter((f) => f.rel !== 'SKILL.md'), skipped });
+        files: own.filter((f) => f.rel !== 'SKILL.md'), skipped });
     }
   } else {
-    // No SKILL.md anywhere: build one from the repo's own instructions.
-    const pick = CANDIDATES.map((c) => [...first.files.keys()].find((rel) => within(rel) === c)).find(Boolean)
-      || [...first.files.keys()].find((rel) => isCandidate(rel) && /\.md$/i.test(rel));
-    if (!pick) throw new Error(NOTHING);
-    const text = first.files.get(pick).toString('utf8');
-    const id = slug(repoName);
-    const description = (summarize(text) || `Panduan dari ${src.repo}`).slice(0, 1024);
-    const refs = [...first.files.keys()].filter((rel) => rel !== pick && isCandidate(rel) && /\.md$/i.test(rel)).slice(0, 10)
-      .map((rel) => ({ rel: `references/${path.posix.basename(rel)}`, data: first.files.get(rel) }));
-    const body = `> Dibuat otomatis oleh SantriHub dari \`${within(pick)}\` di https://github.com/${src.repo}.\n\n${stripFrontmatter(text)}`;
+    // No SKILL.md anywhere: build one from the source's own instructions.
+    const docs = rels.filter((rel) => !hiddenOrVendored(rel) && /\.(md|markdown|mdx)$/i.test(rel));
+    const pick = CANDIDATES.map((c) => rels.find((rel) => rel === c)).find(Boolean)
+      || rels.find((rel) => isRootDoc(rel) && /\.(md|markdown|mdx)$/i.test(rel)) || (docs.length === 1 ? docs[0] : null);
+    if (!pick) throw new Error(`${label} ${NOTHING}`);
+    const text = files.get(pick).toString('utf8');
+    const id = slug(name);
+    const description = (summarize(text) || `Panduan dari ${label}`).slice(0, 1024);
+    const seen = new Set();
+    const refs = docs.filter((rel) => rel !== pick && !seen.has(path.posix.basename(rel)) && seen.add(path.posix.basename(rel))).slice(0, 10)
+      .map((rel) => ({ rel: `references/${path.posix.basename(rel)}`, data: files.get(rel) }));
+    const body = `> Dibuat otomatis oleh SantriHub dari \`${pick}\` di ${origin}.\n\n${stripFrontmatter(text)}`;
     skills.push({ key: '@generated', id, description, generated: true, repaired: false, skillMd: withFrontmatter(body, { name: id, description }), files: refs, skipped: [] });
   }
   for (const s of skills) {
     s.sourceHash = sha(JSON.stringify([s.skillMd, ...s.files.map((f) => [f.rel, sha(f.data)])]));
     if (s.files.reduce((n, f) => n + f.data.length, Buffer.byteLength(s.skillMd)) > MAX_SKILL_BYTES) throw new Error(`Skill ${s.id} melebihi 4 MB.`);
   }
+  return skills;
+}
+
+/** Files of `files` below `prefix/` with that prefix removed. */
+const below = (files, prefix) => (prefix ? new Map([...files].filter(([rel]) => rel.startsWith(prefix + '/')).map(([rel, data]) => [rel.slice(prefix.length + 1), data])) : files);
+
+/** Skills found in a public GitHub repo, ready for the member to review and save (see scanFiles). */
+async function scanGithub(url, { fetcher = globalThis.fetch, includeScripts = false } = {}) {
+  const src = parseIngestUrl(url);
+  const within = (rel) => (src.subdir && rel.startsWith(src.subdir + '/') ? rel.slice(src.subdir.length + 1) : rel);
+  const opts = { name: src.subdir ? src.subdir.split('/').pop() : src.repo.split('/')[1], label: src.repo, origin: `https://github.com/${src.repo}`, includeScripts,
+    tooMany: ' Pakai URL /tree/<branch>/<folder> untuk memilih sebagian.' };
+  const NONE = `Repository ${NOTHING}`;
+  // Pass 1: where are the SKILL.md files, and which root instruction files exist.
+  const first = await downloadArchive(src, (rel) => (relevantSkill(rel) && !hiddenOrVendored(rel)) || isRootDoc(within(rel)), fetcher)
+    .catch((e) => { throw /tidak punya artefak relevan/.test(e.message) ? new Error(NONE) : e; });
+  const roots = skillRoots([...first.files.keys()]);
+  let skills;
+  if (roots.length) {
+    if (roots.length > MAX_SKILLS) throw new Error(`Repository berisi ${roots.length} skill (maks ${MAX_SKILLS}).${opts.tooMany}`);
+    // Pass 2: the full folders of those skills (text files; scripts are left out unless asked).
+    const inSkill = (rel) => roots.some((d) => d === '.' || rel.startsWith(d + '/'));
+    const second = await downloadArchive({ ...src, branch: first.branch }, (rel) => inSkill(rel) && !hiddenOrVendored(rel) && (TEXT_EXT.test(rel) || SCRIPT_EXT.test(rel)), fetcher);
+    skills = scanFiles(below(second.files, src.subdir), { ...opts, oversized: second.oversized.map(within) });
+  } else {
+    skills = scanFiles(below(first.files, src.subdir), opts);
+  }
+  // Keys stay repo paths: saved skills find themselves again by key on "Cek update".
+  if (src.subdir) for (const s of skills) if (s.key !== '@generated') s.key = s.key === '.' ? src.subdir : `${src.subdir}/${s.key}`;
   return { source: { url, repo: src.repo, branch: first.branch, subdir: src.subdir }, skills };
 }
 
@@ -231,8 +262,17 @@ function listLibrary(root) {
     try { text = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8'); } catch { return []; }
     const fm = readFrontmatter(text);
     return [{ id, dir, source: 'library', name: fm.name || id, description: fm.description || '', type: meta.type,
-      url: meta.url || null, repo: meta.repo || null, generated: Boolean(meta.generated), importedAt: meta.importedAt, updatedAt: meta.updatedAt }];
+      url: meta.url || null, repo: meta.repo || null, origin: typeof meta.source === 'string' ? meta.source : null, paket: Array.isArray(meta.paket) ? meta.paket : [], generated: Boolean(meta.generated), importedAt: meta.importedAt, updatedAt: meta.updatedAt }];
   });
+}
+
+/** Which paket a library skill is also shown in (Apps Script, Monorepo, own paket …). */
+function setLibraryPaket(root, id, paket) {
+  const index = readIndex(root);
+  if (!index.skills[id]) throw new Error('Skill tidak ada di library.');
+  index.skills[id] = { ...index.skills[id], paket };
+  writeIndex(root, index);
+  return paket;
 }
 
 function removeSkill(root, id) {
@@ -263,4 +303,4 @@ function markdownSkill({ id, description, content, references = [] }) {
   return { id: finalId, description: finalDescription, skillMd: withFrontmatter(content, { name: finalId, description: finalDescription }), files };
 }
 
-module.exports = { readFrontmatter, libraryRoot, slug, summarize, withFrontmatter, scanGithub, saveSkill, listLibrary, removeSkill, markdownSkill, readIndex, ID_RE };
+module.exports = { readFrontmatter, libraryRoot, slug, summarize, withFrontmatter, scanGithub, scanFiles, validRel, TEXT_EXT, SCRIPT_EXT, saveSkill, listLibrary, removeSkill, setLibraryPaket, markdownSkill, readIndex, ID_RE };

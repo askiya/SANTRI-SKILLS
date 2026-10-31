@@ -41,7 +41,7 @@ function readGateway(file) {
 function setGatewayServer(file, name, entry) {
   if (!NAME_RE.test(name) || name.includes(SEP)) throw new Error('Nama MCP tidak bisa dipakai di Gateway.');
   const servers = readGateway(file);
-  if (entry) servers[name] = { command: entry.command, args: [...entry.args] };
+  if (entry) servers[name] = { command: entry.command, args: [...entry.args], ...(entry.env && Object.keys(entry.env).length ? { env: { ...entry.env } } : {}) };
   else delete servers[name];
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
@@ -190,4 +190,4 @@ function serve({ input = process.stdin, output = process.stdout, servers = readG
   return gw;
 }
 
-module.exports = { serve, createGateway, readGateway, setGatewayServer, gatewayFile, SEP, NAME_RE };
+module.exports = { serve, createGateway, readGateway, setGatewayServer, gatewayFile, Child, SEP, NAME_RE };

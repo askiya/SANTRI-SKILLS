@@ -5,7 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { createSession, AuthError } = require('./auth');
 const { registry, fetchSource, listSkills } = require('./sources');
-const { mcpCatalog, validateRegistry } = require('./registry');
+const { mcpCatalog, validateRegistry, UMUM } = require('./registry');
 function mergedCatalog(remote) {
   const bundled = registry(), sources = [], mcpServers = [];
   for (const source of [...bundled.sources, ...remote.sources]) {
@@ -67,6 +67,10 @@ const { harnessDefs, findHarness, harnessStatus, setSkill, setMcp } = require('.
 const library = require('./library');
 const gateway = require('./mcp-gateway');
 const profiles = require('./profiles');
+const mcpLibrary = require('./mcp-library');
+const { scanUploads } = require('./smart-import');
+const { probeMcp } = require('./mcp-probe');
+const myPaket = require('./my-paket');
 // The SantriHub MCP Gateway as an MCP entry: this runtime with `mcp-gateway` instead of `mcp-serve`.
 const GATEWAY_ID = 'santrihub-gateway', GATEWAY_NAME = 'santrihub';
 const gatewayEntry = () => { const e = ownServerEntry(); return { command: e.command, args: e.args.map((a) => (a === 'mcp-serve' ? 'mcp-gateway' : a)) }; };
@@ -86,10 +90,11 @@ const STATIC = {
 };
 
 const MAX_BODY = 16384;
+const MAX_UPLOAD_BODY = 56 * 1024 * 1024; // smart import: 40 MB of files as base64
 // Private entries for PATH checks; only safe metadata is sent in API responses.
 function configStatusNames(file) { try { const c = JSON.parse(fs.readFileSync(file, 'utf8') || '{}'); return c && c.mcpServers && typeof c.mcpServers === 'object' && !Array.isArray(c.mcpServers) ? Object.fromEntries(Object.entries(c.mcpServers).filter(([,entry])=>mcpKind(entry))) : {}; } catch { return {}; } }
 
-function createDashboardServer({ cwd = process.cwd(), home, env = process.env, apiUrl, websiteUrl, githubFetch = globalThis.fetch, sourceFetch = fetchSource, controlRunner = runControl, bridgeFile, updateCheck = createUpdateChecker({ current: APP_VERSION }) } = {}) {
+function createDashboardServer({ cwd = process.cwd(), home, env = process.env, apiUrl, websiteUrl, githubFetch = globalThis.fetch, sourceFetch = fetchSource, controlRunner = runControl, bridgeFile, updateCheck = createUpdateChecker({ current: APP_VERSION }), probe = probeMcp } = {}) {
   const session = createSession({ apiUrl, websiteUrl });
   const capabilityFile=bridgeFile||path.join(home||os.homedir(),'.santrihub','bridge.json');
   const reposFile=path.join(home||os.homedir(),'.santrihub','repos.json');
@@ -122,6 +127,12 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
   const gatewayPath = gateway.gatewayFile(home || os.homedir(), env);
   const profilesPath = profiles.profilesFile(home || os.homedir());
   const harnessStateFile = path.join(home || os.homedir(), '.santrihub', 'harness-mcp.json');
+  const mcpLibPath = mcpLibrary.mcpLibraryFile(home || os.homedir());
+  const myPaketPath = myPaket.myPaketFile(home || os.homedir());
+  // Paket an own skill/MCP may be tagged with: catalog paket, "umum" and the member's own.
+  const knownPaket = async () => new Set([...mergedCatalog(await session.catalog()).sources.map((x) => x.id), UMUM.id, ...myPaket.readMyPaket(myPaketPath).map((p) => p.id)]);
+  // Names a member's own MCP may not take: catalog ids and the names SantriHub writes.
+  const reservedMcp = async () => new Set([GATEWAY_ID, GATEWAY_NAME, 'santri-skills', ...mcpCatalog(mergedCatalog(await session.catalog())).map((m) => m.id)]);
   // A skill to activate: catalog first, then the member's library.
   async function resolveSkill(id) {
     const skill = (await remoteSkills(mergedCatalog(await session.catalog()), sourceFetch)).find((s) => s.id === id) || library.listLibrary(libRoot).find((s) => s.id === id);
@@ -132,8 +143,10 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
   async function resolveMcp(id) {
     if (id === GATEWAY_ID) return { name: GATEWAY_NAME, base: gatewayEntry() };
     const entry = mcpCatalog(mergedCatalog(await session.catalog())).find((m) => m.id === id);
-    if (!entry) throw new Error(`MCP ${id} tidak terdaftar di katalog.`);
-    return entry.builtin ? { name: 'santri-skills', base: ownServerEntry() } : { name: entry.id, base: { command: entry.command, args: entry.args } };
+    if (entry) return entry.builtin ? { name: 'santri-skills', base: ownServerEntry() } : { name: entry.id, base: { command: entry.command, args: entry.args } };
+    const own = mcpLibrary.readMcpLibrary(mcpLibPath)[id];
+    if (own) return { name: id, base: own.entry, mine: true };
+    throw new Error(`MCP ${id} tidak ada di katalog maupun MCP milik Anda.`);
   }
   // In-memory only. Preview tokens bind exact source + state + selected kind; expire after 10 min.
   const localPreviews = new Map();
@@ -220,12 +233,13 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
       }
 
       // ── POST body helper ──
-      const readBody = async () => {
+      const readBody = async (limit = MAX_BODY) => {
         if (req.headers['content-type'] !== 'application/json') throw new AuthError(400, 'Content-Type wajib application/json');
         if (req.headers.origin !== origin) throw new AuthError(403, 'Origin ditolak');
-        let raw = '';
-        for await (const chunk of req) { raw += chunk; if (Buffer.byteLength(raw) > MAX_BODY) throw new AuthError(400, 'Request terlalu besar'); }
-        return JSON.parse(raw);
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of req) { if ((size += chunk.length) > limit) throw new AuthError(400, 'Request terlalu besar'); chunks.push(chunk); }
+        return JSON.parse(Buffer.concat(chunks).toString('utf8'));
       };
 
       // ── Auth endpoints (POST only) ──
@@ -277,12 +291,17 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         await session.requirePremium();
         const catalog = mergedCatalog(await session.catalog());
         const skills = await remoteSkills(catalog, sourceFetch);
-        const mcpServers = mcpCatalog(catalog).map(({ id, label, description }) => ({ id, label, description }));
+        // Each source is a paket (Apps Script, Monorepo, …); MCP servers without one go to "umum".
+        const mcpServers = mcpCatalog(catalog).map(({ id, label, description, paket }) => ({ id, label, description, paket: paket && paket.length ? paket : [UMUM.id] }));
+        const paket = [...catalog.sources.map(({ id, label, short, description, author, color, icon, starter, order, fit, repo }) => ({ id, label, short: short || label, description: description || '', author: author || '', color: color || 'blue', icon: icon || '✦', starter: starter || null, order: order ?? 100, fit: fit || [], homepage: `https://github.com/${repo}` })), { ...UMUM, starter: null, fit: [], homepage: null }]
+          .map((p) => ({ ...p, skills: skills.filter((s) => s.source === p.id).length, mcp: mcpServers.filter((m) => m.paket.includes(p.id)).length }))
+          .filter((p) => p.skills || p.mcp)
+          .sort((a, b) => a.order - b.order);
         return send(200, {
           cwd,
           skills: skills.map(({ id, description, source }) => ({ id, description, source })),
           mcpServers,
-
+          paket,
         });
       }
 
@@ -301,6 +320,15 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         await session.requirePremium();
         return send(200, { servers: Object.keys(gateway.readGateway(gatewayPath)) });
       }
+      // The member's own MCP servers: names, kind and a short summary; env values never leave the PC.
+      if (req.method === 'GET' && req.url === '/api/mcp-library') {
+        await session.requirePremium();
+        return send(200, { servers: Object.entries(mcpLibrary.readMcpLibrary(mcpLibPath)).map(([name, row]) => ({ id: name, name, from: row.from, addedAt: row.addedAt, ...mcpLibrary.publicEntry(row.entry), paket: row.paket })) });
+      }
+      if (req.method === 'GET' && req.url === '/api/my-paket') {
+        await session.requirePremium();
+        return send(200, { paket: myPaket.readMyPaket(myPaketPath) });
+      }
       if (req.method === 'GET' && req.url === '/api/profiles') {
         await session.requirePremium();
         return send(200, { version: 1, profiles: profiles.readProfiles(profilesPath) });
@@ -308,7 +336,7 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
 
       if (req.method !== 'POST') return send(404, { error: 'Tidak ditemukan' });
       await session.requirePremium();
-      const input = await readBody();
+      const input = await readBody(req.url === '/api/library/upload/preview' ? MAX_UPLOAD_BODY : MAX_BODY);
       if(input.scope!=null&&input.scope!=='global')throw new AuthError(400,'Dashboard hanya scope global.');
       if(['/api/verification/start','/api/uninstall'].includes(req.url)){
         if(!input._csrf||!csrfTokens.has(input._csrf)||Date.now()-csrfTokens.get(input._csrf)>900_000)throw new AuthError(403,'Token CSRF invalid.');
@@ -325,8 +353,10 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
       if (['/api/install', '/api/mcp', '/api/repo/install', '/api/repo/preview', '/api/targets/custom',
            '/api/local/skills/preview', '/api/local/skills/install',
            '/api/local/mcp/preview', '/api/local/mcp/install', '/api/github/preview', '/api/github/install', '/api/repos', '/api/repos/delete', '/api/website/preview', '/api/website/install', '/api/verify', '/api/antigravity/control',
-           '/api/harnesses/skill', '/api/harnesses/mcp',
+           '/api/harnesses/skill', '/api/harnesses/mcp', '/api/harnesses/bulk',
            '/api/library/github/preview', '/api/library/github/save', '/api/library/markdown', '/api/library/delete', '/api/library/update',
+           '/api/library/upload/preview', '/api/library/upload/save', '/api/mcp-library/delete', '/api/mcp/test',
+           '/api/library/paket', '/api/mcp-library/paket', '/api/my-paket/save', '/api/my-paket/delete',
            '/api/gateway', '/api/profiles/save', '/api/profiles/apply', '/api/profiles/delete', '/api/profiles/import'].includes(req.url)) {
         if (!input._csrf || !csrfTokens.has(input._csrf) || Date.now()-csrfTokens.get(input._csrf)>900_000) return send(403, { error: 'Token CSRF tidak valid. Muat ulang halaman.' });
       }
@@ -579,7 +609,69 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
             library.saveSkill(libRoot, { id: skill.id, skillMd: skill.skillMd, files: skill.files, meta: { type: 'markdown', description: skill.description } });
             return send(200, { saved: [skill.id], synced: syncActive(skill.id) });
           }
+          // Smart import: ZIPs, folders, files and MCP configs/commands, reviewed before saving.
+          if (req.url === '/api/library/upload/preview') {
+            const items = input.items == null ? [] : input.items;
+            if (!Array.isArray(items) || items.some((x) => !x || typeof x.path !== 'string' || typeof x.data !== 'string')) throw new AuthError(400, 'Format upload tidak valid.');
+            if (!items.length && !String(input.mcpText || '').trim()) throw new AuthError(400, 'Pilih file, folder, ZIP, atau tempel MCP dulu.');
+            const scan = scanUploads(items.map((x) => ({ path: x.path, data: Buffer.from(x.data, 'base64') })), { mcpText: String(input.mcpText || ''), includeScripts: input.includeScripts === true });
+            const previewId = crypto.randomBytes(24).toString('hex');
+            libraryPreviews.set(previewId, { upload: scan, expires: Date.now() + 600_000 });
+            for (const [k, v] of libraryPreviews) if (v.expires <= Date.now()) libraryPreviews.delete(k);
+            const taken = await catalogIds(), reserved = await reservedMcp(), mine = mcpLibrary.readMcpLibrary(mcpLibPath);
+            return send(200, { previewId, problems: scan.problems,
+              skills: scan.skills.map((s) => ({ key: s.key, source: s.source, id: s.id, description: s.description, generated: s.generated, repaired: s.repaired,
+                files: s.files.map((f) => f.rel), skipped: s.skipped, skillMd: s.skillMd.slice(0, 6000), exists: taken.has(s.id) ? 'catalog' : index.skills[s.id] ? 'library' : null })),
+              mcp: scan.mcp.map((m) => ({ key: m.key, name: m.name, from: m.from, ...mcpLibrary.publicEntry(m.entry), exists: reserved.has(m.name) ? 'catalog' : mine[m.name] ? 'mine' : null })) });
+          }
+          if (req.url === '/api/library/upload/save') {
+            const held = libraryPreviews.get(input.previewId);
+            if (!held || !held.upload || held.expires <= Date.now()) throw new AuthError(409, 'Preview kedaluwarsa. Pilih file lagi.');
+            const picks = Array.isArray(input.picks) ? input.picks : [], mcpPicks = Array.isArray(input.mcpPicks) ? input.mcpPicks : [];
+            if (!picks.length && !mcpPicks.length) throw new AuthError(400, 'Pilih minimal satu skill atau MCP.');
+            if (picks.length > 150 || mcpPicks.length > 50) throw new AuthError(400, 'Terlalu banyak pilihan sekaligus.');
+            const reserved = await reservedMcp(), mine = mcpLibrary.readMcpLibrary(mcpLibPath);
+            let paket;
+            try { paket = myPaket.paketIds(input.paket, await knownPaket()); } catch (e) { throw new AuthError(400, e.message); }
+            // Check everything first: either all picks are saved or none.
+            const skillRows = [];
+            for (const pick of picks) {
+              const s = held.upload.skills.find((x) => x.key === pick.key);
+              if (!s) throw new AuthError(400, 'Skill tidak ada di preview.');
+              const id = String(pick.id || s.id), description = String(pick.description || s.description).replace(/\s+/g, ' ').trim().slice(0, 1024);
+              if (!description) throw new AuthError(400, `Deskripsi ${id} wajib.`);
+              if (skillRows.some((r) => r.id === id)) throw new AuthError(400, `ID ${id} dipilih dua kali.`);
+              await assertFree(id, (meta) => input.overwrite === true && meta.type === 'upload');
+              skillRows.push({ s, id, description });
+            }
+            const mcpRows = [];
+            for (const pick of mcpPicks) {
+              const m = held.upload.mcp.find((x) => x.key === pick.key);
+              if (!m) throw new AuthError(400, 'MCP tidak ada di preview.');
+              const name = String(pick.name || m.name);
+              if (!mcpLibrary.NAME_RE.test(name)) throw new AuthError(400, `Nama MCP "${name}" wajib huruf, angka, - atau _ (maks 40).`);
+              if (reserved.has(name)) throw new AuthError(409, `Nama ${name} dipakai MCP katalog. Pilih nama lain.`);
+              if (mine[name] && input.overwrite !== true) throw new AuthError(409, `MCP ${name} sudah ada di koleksi Anda. Ganti nama atau centang "timpa".`);
+              if (mcpRows.some((r) => r.name === name)) throw new AuthError(400, `Nama ${name} dipilih dua kali.`);
+              mcpRows.push({ m, name });
+            }
+            const saved = [], savedMcp = [], synced = [];
+            for (const { s, id, description } of skillRows) {
+              library.saveSkill(libRoot, { id, skillMd: library.withFrontmatter(s.skillMd, { name: id, description }), files: s.files,
+                meta: { type: 'upload', source: s.source, key: s.key, generated: s.generated, sourceHash: s.sourceHash, description, paket } });
+              saved.push(id);
+              synced.push(...syncActive(id).map((h) => `${id} @ ${h}`));
+            }
+            for (const { m, name } of mcpRows) savedMcp.push(mcpLibrary.saveMcp(mcpLibPath, name, m.entry, m.from, paket));
+            libraryPreviews.delete(input.previewId);
+            return send(200, { saved, savedMcp, synced });
+          }
           if (typeof input.id !== 'string' || !index.skills[input.id]) throw new AuthError(404, 'Skill tidak ada di library.');
+          if (req.url === '/api/library/paket') {
+            let paket;
+            try { paket = myPaket.paketIds(input.paket, await knownPaket()); } catch (e) { throw new AuthError(400, e.message); }
+            return send(200, { id: input.id, paket: library.setLibraryPaket(libRoot, input.id, paket) });
+          }
           if (req.url === '/api/library/delete') {
             // Its SantriHub copies in the AI agents go too; folders the member made stay.
             const deactivated = defs.filter((h) => ownedMarker(path.join(h.skillsDir, input.id))).map((h) => { removeInstalled({ kind: 'skill', id: input.id, skillsDir: h.skillsDir }); return h.name; });
@@ -602,12 +694,57 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         }
       }
 
+      // "Tes koneksi": start one MCP server like an agent would and list its tools.
+      if (req.url === '/api/mcp/test') {
+        if (typeof input.id !== 'string') throw new AuthError(400, 'id wajib.');
+        const m = await resolveMcp(input.id);
+        const result = await probe(m.base, { env: input.id === GATEWAY_ID ? { ...env, SANTRIHUB_GATEWAY_FILE: gatewayPath } : env });
+        if (input.id === GATEWAY_ID && result.ok && !result.toolCount) {
+          result.hint = Object.keys(gateway.readGateway(gatewayPath)).length
+            ? 'Gateway jalan, tapi MCP di dalamnya belum menawarkan tool. Tes koneksi tiap MCP di Koleksi untuk melihat yang gagal.'
+            : 'Gateway masih kosong. Pilih MCP di panel Gateway pada langkah 3 · Aktifkan.';
+        }
+        return send(200, { id: input.id, name: m.name, ...result });
+      }
+      if (req.url === '/api/mcp-library/paket') {
+        if (typeof input.id !== 'string' || !mcpLibrary.readMcpLibrary(mcpLibPath)[input.id]) throw new AuthError(404, 'MCP tidak ada di koleksi Anda.');
+        let paket;
+        try { paket = myPaket.paketIds(input.paket, await knownPaket()); } catch (e) { throw new AuthError(400, e.message); }
+        return send(200, { id: input.id, paket: mcpLibrary.setMcpPaket(mcpLibPath, input.id, paket) });
+      }
+      if (req.url === '/api/my-paket/save') {
+        try { return send(200, { paket: myPaket.addMyPaket(myPaketPath, input) }); } catch (e) { throw new AuthError(400, e.message); }
+      }
+      // Deleting an own paket untags its skills and MCP; the skills and MCP themselves stay.
+      if (req.url === '/api/my-paket/delete') {
+        if (typeof input.id !== 'string' || !myPaket.removeMyPaket(myPaketPath, input.id)) throw new AuthError(404, 'Paket tidak ditemukan.');
+        for (const s of library.listLibrary(libRoot)) if (s.paket.includes(input.id)) library.setLibraryPaket(libRoot, s.id, s.paket.filter((p) => p !== input.id));
+        for (const [name, row] of Object.entries(mcpLibrary.readMcpLibrary(mcpLibPath))) if (row.paket.includes(input.id)) mcpLibrary.setMcpPaket(mcpLibPath, name, row.paket.filter((p) => p !== input.id));
+        return send(200, { removed: input.id });
+      }
+      // Removes one of the member's own MCP servers, and SantriHub's copies of it in the agents.
+      if (req.url === '/api/mcp-library/delete') {
+        const own = mcpLibrary.readMcpLibrary(mcpLibPath)[input.id];
+        if (typeof input.id !== 'string' || !own) throw new AuthError(404, 'MCP tidak ada di koleksi Anda.');
+        if (busy) return send(409, { error: 'Instalasi sedang berjalan' });
+        busy = true;
+        try {
+          const deactivated = [], kept = [];
+          for (const h of harnessDefs({ home: home || os.homedir(), env })) {
+            try { if (setMcp(h, input.id, own.entry, false, { stateFile: harnessStateFile }).removed) deactivated.push(h.name); } catch { kept.push(h.name); }
+          }
+          if (gateway.readGateway(gatewayPath)[input.id]) gateway.setGatewayServer(gatewayPath, input.id, null);
+          mcpLibrary.removeMcp(mcpLibPath, input.id);
+          return send(200, { removed: true, id: input.id, deactivated, kept });
+        } finally { busy = false; }
+      }
+
       if (req.url === '/api/gateway') {
         if (typeof input.id !== 'string' || typeof input.enable !== 'boolean') throw new AuthError(400, 'id dan enable wajib.');
-        const entry = mcpCatalog(mergedCatalog(await session.catalog())).find((m) => m.id === input.id);
-        if (!entry) throw new AuthError(400, 'MCP tidak terdaftar di katalog.');
-        const name = entry.builtin ? 'santri-skills' : entry.id;
-        const servers = gateway.setGatewayServer(gatewayPath, name, input.enable ? (entry.builtin ? ownServerEntry() : { command: entry.command, args: entry.args }) : null);
+        if (input.id === GATEWAY_ID) throw new AuthError(400, 'Gateway tidak bisa berisi dirinya sendiri.');
+        const m = await resolveMcp(input.id).catch(() => { throw new AuthError(400, 'MCP tidak terdaftar di katalog maupun koleksi Anda.'); });
+        if (input.enable && m.base.url) throw new AuthError(400, 'MCP lewat URL tidak bisa masuk Gateway. Aktifkan langsung per AI agent.');
+        const servers = gateway.setGatewayServer(gatewayPath, m.name, input.enable ? m.base : null);
         return send(200, { servers, hint: 'Reload AI agent yang memakai SantriHub Gateway agar daftar tool diperbarui.' });
       }
 
@@ -627,6 +764,29 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
           busy = false;
         }
       }
+      // A whole paket (or any set) on or off for one harness in one go; each item reports alone.
+      if (req.url === '/api/harnesses/bulk') {
+        const ids = (v) => (v == null ? [] : v);
+        const skills = ids(input.skills), mcp = ids(input.mcp);
+        if (typeof input.harness !== 'string' || typeof input.enable !== 'boolean' || !Array.isArray(skills) || !Array.isArray(mcp)
+          || [...skills, ...mcp].some((x) => typeof x !== 'string') || !skills.length && !mcp.length || skills.length + mcp.length > 200) throw new AuthError(400, 'harness, enable dan daftar skills/mcp wajib.');
+        const h = findHarness(harnessDefs({ home: home || os.homedir(), env }), input.harness);
+        if (busy) return send(409, { error: 'Instalasi sedang berjalan' });
+        busy = true;
+        const done = [], failed = [];
+        try {
+          clearVerification();
+          for (const id of skills) {
+            try { setSkill(h, input.enable ? await resolveSkill(id) : { id }, input.enable); done.push(id); } catch (e) { failed.push({ id, error: e.message }); }
+          }
+          for (const id of mcp) {
+            try { const m = await resolveMcp(id); setMcp(h, m.name, m.base, input.enable, { stateFile: harnessStateFile }); done.push(id); } catch (e) { failed.push({ id, error: e.message }); }
+          }
+        } finally {
+          busy = false;
+        }
+        return send(200, { done, failed, harness: h.id, hint: h.restartHint || `Reload ${h.name} agar perubahan terbaca.` });
+      }
 
       // ── Profiles: named sets of skills + MCP applied to an agent in one go ──
       if (req.url.startsWith('/api/profiles/')) {
@@ -637,7 +797,8 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
           // What SantriHub turned on in this agent becomes the profile.
           const st = harnessStatus({ home: home || os.homedir(), env }).find((x) => x.id === h.id);
           const known = new Set([...(await remoteSkills(mergedCatalog(await session.catalog()), sourceFetch)).map((s) => s.id), ...library.listLibrary(libRoot).map((s) => s.id)]);
-          const mcpIds = new Map([[GATEWAY_NAME, GATEWAY_ID], ...mcpCatalog(mergedCatalog(await session.catalog())).map((m) => [m.builtin ? 'santri-skills' : m.id, m.id])]);
+          const mcpIds = new Map([[GATEWAY_NAME, GATEWAY_ID], ...mcpCatalog(mergedCatalog(await session.catalog())).map((m) => [m.builtin ? 'santri-skills' : m.id, m.id]),
+            ...Object.keys(mcpLibrary.readMcpLibrary(mcpLibPath)).map((n) => [n, n])]);
           const p = { skills: st.skills.filter((s) => s.managed && known.has(s.id)).map((s) => s.id), mcp: st.mcp.names.filter((n) => mcpIds.has(n)).map((n) => mcpIds.get(n)) };
           if (!p.skills.length && !p.mcp.length) throw new AuthError(400, `Belum ada skill atau MCP dari SantriHub yang aktif di ${h.name}.`);
           return send(200, { name: input.name, ...profiles.saveProfile(profilesPath, input.name, p) });

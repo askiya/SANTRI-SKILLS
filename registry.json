@@ -3,18 +3,53 @@
     {
       "id": "appscript",
       "label": "Google Apps Script Skills",
+      "short": "Apps Script",
+      "description": "Web app, website dan aplikasi di atas Google Sheets dan Apps Script: gratis, cepat jadi, cocok untuk sistem sekolah, toko dan internal.",
+      "fit": [
+        "Data cukup di Google Sheets",
+        "Gratis, tanpa server dan hosting",
+        "Cepat jadi: sekolah, toko, sistem internal"
+      ],
+      "author": "Askiya · Santriverse",
+      "color": "teal",
+      "icon": "▦",
+      "starter": "apps-script-architect",
+      "order": 1,
       "repo": "askiya/GOOGLE-APPSCRIPT-SKILLS",
       "branch": "main",
       "skillsDir": "skills",
-      "docsDirs": ["docs", "examples", "templates"]
+      "docsDirs": [
+        "docs",
+        "examples",
+        "templates"
+      ]
     },
     {
       "id": "monorepo",
       "label": "Pedoman Monorepo Skills",
+      "short": "Monorepo",
+      "description": "Aplikasi modern skala besar dalam satu monorepo: dari PRD sampai deploy, dengan pedoman, kelas dan checklist Santriverse.",
+      "fit": [
+        "Banyak pengguna dan database sungguhan",
+        "Web + aplikasi dalam satu repo",
+        "Dikerjakan bertahap dari PRD sampai deploy"
+      ],
+      "author": "Askiya · Santriverse",
+      "color": "purple",
+      "icon": "◫",
+      "starter": "santriverse-vibe-coding",
+      "order": 2,
       "repo": "askiya/MONOREPO-SKILLS",
       "branch": "main",
       "skillsDir": "skills",
-      "docsDirs": ["docs", "checklists", "prompts", "templates", "kelas", "paket"]
+      "docsDirs": [
+        "docs",
+        "checklists",
+        "prompts",
+        "templates",
+        "kelas",
+        "paket"
+      ]
     }
   ],
   "mcpServers": []

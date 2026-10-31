@@ -34,7 +34,26 @@ function validateSource(source) {
     Array.isArray(dirs) &&
     dirs.every(safeRelative);
   if (!ok) throw new Error(`Sumber registry invalid: ${(source && source.id) || '?'}`);
-  return { id: source.id, label: source.label || source.id, repo: source.repo, branch: source.branch, skillsDir: source.skillsDir, docsDirs: dirs };
+  return { id: source.id, label: source.label || source.id, repo: source.repo, branch: source.branch, skillsDir: source.skillsDir, docsDirs: dirs, ...paketMeta(source) };
+}
+
+// A source is shown as a "paket" (Apps Script, Monorepo, …): optional display metadata.
+// Display only, so a bad field is dropped instead of failing the whole catalog.
+const COLORS = ['teal', 'purple', 'coral', 'blue', 'amber', 'pink', 'green', 'gray'];
+const text = (v, max) => (typeof v === 'string' && v.trim() && !/[\x00-\x1f<>]/.test(v) ? v.trim().slice(0, max) : undefined);
+function paketMeta(source) {
+  const meta = {
+    short: text(source.short, 40),
+    description: text(source.description, 300),
+    author: text(source.author, 80),
+    color: COLORS.includes(source.color) ? source.color : undefined,
+    icon: text(source.icon, 4),
+    starter: typeof source.starter === 'string' && valid.id.test(source.starter) ? source.starter : undefined,
+    order: Number.isInteger(source.order) ? source.order : undefined,
+    // "Cocok jika …" points for choosing a paket on Beranda.
+    fit: Array.isArray(source.fit) ? source.fit.map((x) => text(x, 90)).filter(Boolean).slice(0, 4) : undefined,
+  };
+  return Object.fromEntries(Object.entries(meta).filter(([, v]) => v !== undefined));
 }
 
 // Declarative config only: no shell metacharacters, no env/token/key fields, string args.
@@ -53,10 +72,14 @@ function validateMcpEntry(entry) {
     args.every((a) => typeof a === 'string' && !SHELL.test(a)) &&
     !Object.keys(entry).some((k) => SECRET_KEY.test(k));
   if (!ok) throw new Error(`Entri MCP invalid atau berisi rahasia: ${(entry && entry.id) || '?'}`);
-  return { id: entry.id, label: entry.label || entry.id, description: entry.description || '', command: entry.command, args };
+  // Which paket(s) the server belongs to; none = "umum" (useful for every paket).
+  const paket = Array.isArray(entry.paket) ? entry.paket.filter((p) => typeof p === 'string' && valid.id.test(p)).slice(0, 10) : [];
+  return { id: entry.id, label: entry.label || entry.id, description: entry.description || '', command: entry.command, args, ...(paket.length ? { paket } : {}) };
 }
 
 const BUILTIN_MCP = { id: 'santri-skills', label: 'Santri Skills MCP', description: 'Akses pedoman Santriverse melalui MCP lokal.', builtin: true };
+// The paket for MCP servers that serve every paket (the built-in santri-skills docs server).
+const UMUM = { id: 'umum', label: 'Umum', short: 'Umum', description: 'Dipakai semua paket: pedoman dan alat bantu Santriverse.', author: 'Santriverse', color: 'gray', icon: '⌁', order: 900 };
 
 // Built-in server first, then the user's vetted catalog entries.
 function mcpCatalog(reg = loadRegistry()) {
@@ -89,4 +112,4 @@ function validateRegistry(raw) {
   return { sources, mcpServers };
 }
 
-module.exports = { validateRegistry, loadRegistry, validateSource, validateMcpEntry, mcpCatalog, BUILTIN_MCP, BUNDLED, valid };
+module.exports = { validateRegistry, loadRegistry, validateSource, validateMcpEntry, mcpCatalog, paketMeta, BUILTIN_MCP, UMUM, BUNDLED, valid };
