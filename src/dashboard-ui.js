@@ -1,6 +1,6 @@
 'use strict';
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],show=(el,v=true)=>{el.hidden=!v};
-const PAGES={home:'Beranda',add:'1 · Tambah',collection:'2 · Koleksi',agents:'3 · Aktifkan',status:'4 · Cek & Tes',skills:'Skills terpasang (Antigravity)',mcp:'MCP terpasang (Antigravity)',library:'Skill Saya',repos:'Repositories',extensions:'Extensions',activity:'Riwayat'};
+const PAGES={home:'Beranda',add:'1 · Tambah',collection:'2 · Koleksi',agents:'3 · Aktifkan',status:'4 · Cek & Tes',skills:'Skill terpasang (Antigravity)',mcp:'MCP terpasang (Antigravity)',library:'Skill Saya',repos:'Repositori',extensions:'Extensions',activity:'Riwayat'};
 let catalog={skills:[],mcpServers:[]},csrf='',lastStatus=null;
 let statusTimer=null,statusRequest=null,statusEpoch=0;
 const selectedSkills=new Set();
@@ -74,6 +74,7 @@ async function toggleAgent(h,r,box){const enable=box.checked;agentsBusy=true;$$(
   try{const res=await post(r.kind==='mcp'?'/api/harnesses/mcp':'/api/harnesses/skill',{harness:h.id,id:r.id,enable});done(`✓ ${r.label} ${enable?'aktif':'nonaktif'} di ${h.name}. ${res.hint||''}`)}
   catch(e){fail(e)}finally{agentsBusy=false;show($('#progress'),false);await loadAgents()}}
 // ─ Gateway + profiles (AI Agents page): /api/gateway, /api/profiles ─
+$$('[data-extra]').forEach(b=>b.onclick=()=>$$('[data-extra]').forEach(x=>{const on=x===b;x.setAttribute('aria-selected',String(on));show(document.getElementById(x.dataset.extra),on)}));
 let gatewayServers=[],profiles={};
 function renderGateway(){const host=$('#gateway-list');
   const rows=[...catalog.mcpServers,...myMcp.filter(m=>m.kind==='stdio').map(m=>({id:m.id,label:m.name+' (milik saya)',description:m.summary}))];
@@ -98,8 +99,9 @@ $('#profile-import').onchange=async()=>{const f=$('#profile-import').files[0];if
 // ─ Skill Saya: the member's library via /api/library (src/library.js) ─
 let librarySkills=[],libPreview=null;
 const readFile=file=>new Promise((ok,no)=>{if(file.size>512*1024)return no(new Error(`${file.name} melebihi 512 KB.`));const r=new FileReader();r.onload=()=>ok(String(r.result));r.onerror=()=>no(new Error(`${file.name} tidak bisa dibaca.`));r.readAsText(file)});
+function emptyState(text,label,action){const box=el('div','empty-state');box.append(el('p',null,text));if(label){const b=el('button','secondary',label);b.type='button';b.onclick=action;box.append(b)}return box}
 function renderLibrary(){const host=$('#library-list');
-  if(!librarySkills.length){host.replaceChildren(el('p','muted','Library masih kosong. Import dari GitHub atau buat dari Markdown.'));return}
+  if(!librarySkills.length){host.replaceChildren(emptyState('Belum ada skill milik Anda. Import dari GitHub atau buat dari Markdown.','+ Import dari GitHub',()=>$('#lib-open-github').click()));return}
   host.replaceChildren(...librarySkills.map(s=>{const card=el('article','panel lib-card');const head=el('div','lib-card-head');head.append(el('strong',null,s.id),el('span','pill',({github:'GITHUB',upload:'UPLOAD'})[s.type]||'MARKDOWN'));if(s.generated)head.append(el('span','pill','SKILL.md DIBUAT OTOMATIS'));
     const about=el('p',null,s.description||'(tanpa deskripsi)');about.title=s.description||'';card.append(head,about);
     if(s.repo){const link=el('a','lib-source','github.com/'+s.repo);link.href='https://github.com/'+s.repo;link.target='_blank';link.rel='noopener noreferrer';card.append(link)}
@@ -217,8 +219,9 @@ function renderPaketCards(items){const host=$('#paket-cards');
     const head=el('span','paket-card-head');head.append(el('span','paket-icon',p.icon),el('strong',null,p.short));card.append(head,el('small','paket-desc',p.description));
     card.append(el('span','paket-meta',[sk&&`${sk} skill`,mc&&`${mc} MCP`].filter(Boolean).join(' · ')||'Belum ada isi'),el('span','paket-by',p.author?'oleh '+p.author:''));
     if(p.starter)card.append(el('span','paket-starter','Mulai dari: '+p.starter));return card}).filter(Boolean),newPaketCard())}
-function renderPaketFilters(){const host=$('#collection-filters');
-  host.replaceChildren(...[{id:'all',short:'Semua'},...paketList()].map(p=>{const b=el('button',null,p.short);b.type='button';b.setAttribute('aria-pressed',String(collectionPaket===p.id));b.onclick=()=>{collectionPaket=p.id;renderCollection()};return b}))}
+function renderPaketFilters(){const host=$('#collection-filters');if(collectionPaket==='all'){host.replaceChildren();return}
+  const p=paketById(collectionPaket),b=el('button','filter-chip paket-'+(p.color||'gray'));b.type='button';b.setAttribute('aria-label',`Hapus saringan paket ${p.short}`);
+  b.append(el('span',null,'Paket: '+p.short),el('span',null,'×'));b.onclick=()=>{collectionPaket='all';renderCollection()};host.replaceChildren(b)}
 function renderPaketBulk(items){const host=$('#paket-bulk'),found=detectedAgents(),p=paketById(collectionPaket);show(host,collectionPaket!=='all'&&(items.length>0||p.custom));if(host.hidden){host.replaceChildren();return}
   const remove=()=>{const b=el('button','secondary danger','Hapus paket');b.type='button';b.onclick=()=>deletePaket(p,b);return b};
   if(!items.length){host.replaceChildren(el('span','muted',`Paket ${p.short} masih kosong. Tandai skill milik Anda lewat tombol "Paket…" di kartunya.`),remove());return}
@@ -292,49 +295,91 @@ const mcpPrompt=name=>`Sebutkan semua tool dari MCP "${name}" yang tersedia untu
 function mcpIdFor(name){if(name==='santrihub')return GATEWAY_ID;
   return catalog.mcpServers.some(m=>m.id===name)||myMcp.some(m=>m.id===name)?name:null}
 async function copyText(text,btn){try{await navigator.clipboard.writeText(text);const old=btn.textContent;btn.textContent='Tersalin ✓';setTimeout(()=>{btn.textContent=old},1400)}catch{const host=btn.closest('li')||btn.parentElement;host.querySelector('.copy-manual')?.remove();const pre=el('pre','copy-manual',text);host.append(pre);getSelection().selectAllChildren(pre);status('Clipboard diblokir: teks sudah diseleksi, tekan Ctrl+C.',true)}}
+let checkAgent='',checkAll=false;const CHECK_LIMIT=6;
 function renderAgentChecks(){const host=$('#agent-checks');if(!host)return;const found=detectedAgents();
   if(!agents.length){host.replaceChildren(el('p','muted','AI agent belum dimuat.'));return}
   if(!found.length){host.replaceChildren(el('p','muted','Belum ada AI agent terdeteksi di komputer ini.'));return}
-  host.replaceChildren(...found.map(h=>{const card=el('article','agent-check'),head=el('div','agent-check-head');
-    const mine=h.skills.filter(s=>s.managed).map(s=>s.id),others=h.skills.filter(s=>!s.managed).map(s=>s.id);
-    head.append(el('strong',null,h.name),el('span','pill '+(mine.length||h.mcp.names.length?'ok':''),`${h.skills.length} skill · ${h.mcp.names.length} MCP`));card.append(head);
-    if(h.mcp.valid===false)card.append(el('p','agent-check-warn','Config MCP agent ini tidak bisa dibaca (JSON/TOML rusak). Perbaiki file-nya dulu: '+h.mcp.file));
-    const steps=el('ol','agent-check-steps');for(const s of RELOAD[h.id]||[`Reload ${h.name}.`]){const li=el('li');li.innerHTML=s;steps.append(li)}
-    const reload=el('div','agent-check-block');reload.append(el('span','agent-check-label','Muat ulang agent'),steps);
-    if(h.id==='antigravity'){const b=el('button','secondary','Buka Cek & Tes Antigravity');b.type='button';b.onclick=()=>$('#check-test').click();reload.append(b)}
-    const items=el('div','agent-check-block');items.append(el('span','agent-check-label','Tes & prompt uji'));
-    const list=el('ul','agent-check-items');
-    for(const name of h.mcp.names){const li=el('li','agent-check-item'),id=mcpIdFor(name);li.append(el('span','agent-kind mcp','MCP'),el('span','agent-check-name',name));
-      const acts=el('span','agent-check-actions');
-      if(id){const t=el('button','secondary','Tes koneksi');t.type='button';t.onclick=()=>testMcp(id,li,t);acts.append(t)}
-      else acts.append(el('small','muted','bukan dari SantriHub'));
-      const c=el('button','secondary','Salin prompt');c.type='button';c.onclick=()=>copyText(mcpPrompt(name),c);acts.append(c);li.append(acts);list.append(li)}
-    for(const id of [...mine,...others]){const li=el('li','agent-check-item');li.append(el('span','agent-kind skill'+(mine.includes(id)?'':' mine'),'SKILL'),el('span','agent-check-name',id+(mine.includes(id)?'':' (milik Anda)')));
-      const acts=el('span','agent-check-actions'),c=el('button','secondary','Salin prompt');c.type='button';c.onclick=()=>copyText(skillPrompt(id),c);acts.append(c);li.append(acts);list.append(li)}
-    if(!list.children.length){const empty=el('li','muted','Belum ada skill atau MCP di agent ini. ');const a=el('button','secondary','Aktifkan dulu →');a.type='button';a.onclick=()=>go('agents');empty.append(a);list.append(empty)}
-    items.append(list);card.append(reload,items);return card}))}
-$('#agent-checks-refresh').onclick=()=>busy($('#agent-checks-refresh'),'Mendeteksi AI agent…',loadAgents);
+  if(!found.some(h=>h.id===checkAgent))checkAgent=found[0].id;const h=found.find(x=>x.id===checkAgent);
+  const tabs=el('div','agent-tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','AI agent');
+  for(const x of found){const t=el('button','agent-tab');t.type='button';t.setAttribute('role','tab');t.setAttribute('aria-selected',String(x.id===checkAgent));
+    t.append(el('span',null,x.name),el('span','count',String(x.skills.length+x.mcp.names.length)));t.onclick=()=>{checkAgent=x.id;checkAll=false;renderAgentChecks()};tabs.append(t)}
+  const card=el('article','agent-check');card.setAttribute('role','tabpanel');card.setAttribute('aria-label',h.name);
+  const mine=h.skills.filter(s=>s.managed).map(s=>s.id),others=h.skills.filter(s=>!s.managed).map(s=>s.id);
+  if(h.mcp.valid===false)card.append(el('p','agent-check-warn','Config MCP agent ini tidak bisa dibaca (JSON/TOML rusak). Perbaiki file-nya dulu: '+h.mcp.file));
+  const stepHead=(n,text)=>{const t=el('h3');t.append(el('i',null,n),document.createTextNode(text));return t};
+  const reload=el('section','agent-check-step'),steps=el('ol','agent-check-steps');for(const s of RELOAD[h.id]||[`Reload ${h.name}.`]){const li=el('li');li.innerHTML=s;steps.append(li)}
+  reload.append(stepHead('1','Muat ulang '+h.name),el('p',null,'Agent membaca skill dan MCP saat mulai, jadi muat ulang setelah mengaktifkan.'),steps);
+  if(h.id==='antigravity'){const b=el('button','secondary','Buka Cek & Tes Antigravity');b.type='button';b.onclick=()=>$('#check-test').click();reload.append(b)}
+  const test=el('section','agent-check-step'),list=el('ul','agent-check-items');
+  test.append(stepHead('2','Coba di chat'),el('p',null,`Tes koneksi MCP di sini, atau salin prompt uji lalu tempel di chat ${h.name}.`));
+  const rows=[];
+  for(const name of h.mcp.names){const li=el('li','agent-check-item'),id=mcpIdFor(name);li.append(el('span','agent-kind mcp','MCP'),el('span','agent-check-name',name));
+    const acts=el('span','agent-check-actions');
+    if(id){const t=el('button','secondary','Tes koneksi');t.type='button';t.onclick=()=>testMcp(id,li,t);acts.append(t)}
+    else acts.append(el('small','muted','bukan dari SantriHub'));
+    const c=el('button','secondary','Salin prompt');c.type='button';c.onclick=()=>copyText(mcpPrompt(name),c);acts.append(c);li.append(acts);rows.push(li)}
+  for(const id of [...mine,...others]){const li=el('li','agent-check-item'),name=el('span','agent-check-name',id+(mine.includes(id)?'':' (milik Anda)'));name.title=id;
+    li.append(el('span','agent-kind skill'+(mine.includes(id)?'':' mine'),'SKILL'),name);
+    const acts=el('span','agent-check-actions'),c=el('button','secondary','Salin prompt');c.type='button';c.onclick=()=>copyText(skillPrompt(id),c);acts.append(c);li.append(acts);rows.push(li)}
+  if(!rows.length){const empty=el('li','muted','Belum ada skill atau MCP di agent ini. ');const a=el('button','secondary','Aktifkan dulu →');a.type='button';a.onclick=()=>go('agents');empty.append(a);rows.push(empty)}
+  list.append(...(checkAll?rows:rows.slice(0,CHECK_LIMIT)));test.append(list);
+  if(rows.length>CHECK_LIMIT){const more=el('button','secondary',checkAll?'Tampilkan lebih sedikit':`Tampilkan semua (${rows.length})`);more.type='button';more.onclick=()=>{checkAll=!checkAll;renderAgentChecks()};test.append(more)}
+  card.append(reload,test);host.replaceChildren(tabs,card)}
 
-// ─ Tur singkat: 5 slides over the 4-step flow; shown once per browser, replay from Beranda or the profile menu ─
+// ─ Tur singkat: a spotlight walks the 4-step flow; the card sits next to what it explains. Shown once per browser, replay from Beranda or the profile menu ─
 const TOUR_KEY='santrihub-tour-v1';
+// target: selectors tried in order; the first one that is on screen wins, and all its visible matches are highlighted together.
 const TOUR=[
-  {page:'home',title:'Selamat datang di SantriHub',text:'Satu tempat untuk mengelola skill dan MCP semua AI agent Anda: Claude Code, Codex, Antigravity, Gemini CLI, Cursor, VS Code, dan Windsurf.',points:['Pilih jalur proyek di Beranda: paket Apps Script atau Monorepo, lalu pasang sekali klik.','Ikuti 4 langkah di sidebar, dari atas ke bawah.','Beranda selalu menunjukkan langkah berikutnya ("Mulai di sini").']},
-  {page:'add',title:'1 · Tambah',text:'Masukkan skill dan MCP dari mana saja.',points:['Tarik banyak ZIP, folder, atau file .md sekaligus. SKILL.md dibuat otomatis bila belum ada.','Tempel config MCP, perintah npx/uvx, atau URL MCP.','Atau ambil dari katalog premium dan GitHub.']},
-  {page:'collection',title:'2 · Koleksi',text:'Semua yang Anda tambahkan berkumpul di sini, bersama katalog premium Santriverse.',points:['Lihat di agent mana tiap item sudah aktif.','Tombol "Tes koneksi" langsung menjalankan MCP untuk memastikan ia bekerja.']},
-  {page:'agents',title:'3 · Aktifkan',text:'Pilih skill dan MCP untuk tiap AI agent dengan mencentang tabel.',points:['SantriHub hanya menyentuh file buatannya sendiri; config Anda yang lain aman.','Pakai Gateway untuk banyak MCP lewat satu entri, atau Profil untuk menyalin set ke agent lain.']},
-  {page:'status',title:'4 · Cek & Tes',text:'Pastikan semuanya benar-benar terbaca oleh AI agent.',points:['Tes koneksi MCP, lalu ikuti cara memuat ulang agent.','Salin prompt uji dan tempel di chat agent untuk membuktikannya.']}];
-let tourIndex=0;const tour=$('#tour');
+  {page:'home',target:['.home-hero'],title:'Selamat datang di SantriHub',text:'Satu tempat untuk skill dan MCP semua AI agent Anda: Claude Code, Codex, Antigravity, Gemini CLI, Cursor, VS Code, dan Windsurf.',points:['Tur ini menunjukkan tiap bagian satu per satu. Kurang dari 1 menit.']},
+  {page:'home',target:['.nav-flow','.sidebar-rail .rail-step','#nav-toggle'],title:'4 langkah, dari atas ke bawah',text:'Semua pekerjaan mengikuti alur ini: Tambah → Koleksi → Aktifkan → Cek & Tes.',points:['Klik nomor langkah kapan saja untuk pindah.']},
+  {page:'home',target:['#home-paths'],title:'Pilih jalur proyek',text:'Paket Apps Script atau Monorepo berisi skill yang sudah disusun Santriverse.',points:['Pilih AI agent, lalu klik "Pasang paket". Semua isinya aktif sekaligus.']},
+  {page:'add',target:['#drop-zone','.smart-import'],title:'1 · Tambah: impor pintar',text:'Tarik banyak ZIP, folder, atau file .md sekaligus ke kotak ini.',points:['SKILL.md dibuat otomatis bila belum ada.','Klik "Pindai & pratinjau" untuk melihat isinya sebelum disimpan.']},
+  {page:'add',target:['#mcp-paste-box'],title:'Tempel MCP',text:'Buka bagian ini untuk menempel config MCP (JSON), perintah npx/uvx, atau URL MCP.',points:['API key hanya disimpan di komputer ini.']},
+  {page:'collection',target:['#paket-cards'],title:'2 · Koleksi per paket',text:'Semua yang Anda tambahkan berkumpul di sini, bersama katalog premium Santriverse.',points:['Klik satu paket untuk melihat isinya dan menyalakannya sekaligus di satu agent.']},
+  {page:'collection',target:['#collection-list'],title:'Kartu skill & MCP',text:'Tiap kartu menunjukkan di agent mana item itu sudah aktif.',points:['MCP punya tombol "Tes koneksi" untuk memastikan ia benar-benar jalan.']},
+  {page:'agents',target:['.agents-scroll','#agents-cards'],title:'3 · Aktifkan per AI agent',text:'Centang tabel ini untuk menyalakan skill atau MCP di tiap agent.',points:['SantriHub hanya menyentuh file buatannya sendiri; config Anda yang lain aman.']},
+  {page:'status',target:['.agent-checks-wrap'],title:'4 · Cek & Tes',text:'Pastikan semuanya benar-benar terbaca oleh AI agent.',points:['Tes MCP, muat ulang agent, lalu salin prompt uji ke chat.']}];
+let tourIndex=0,tourEl=null,tourWatch=null,tourFrame=0;const tour=$('#tour'),tourSpot=$('#tour-spot');
 function tourStorage(fn){try{return fn(localStorage)}catch{return null}}
+// Off-canvas (closed mobile sidebar, collapsed rail) does not count; scrolled out of view does, since the tour scrolls to it.
+function onScreen(e){const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&r.right>0&&r.left<innerWidth&&getComputedStyle(e).visibility!=='hidden'}
+function tourTargets(s){for(const sel of s.target){const found=$$(sel).filter(onScreen);if(found.length)return found}return []}
+function tourRect(els){if(!els.length)return null;const rs=els.map(e=>e.getBoundingClientRect()),pad=8;
+  return {left:Math.min(...rs.map(r=>r.left))-pad,top:Math.min(...rs.map(r=>r.top))-pad,right:Math.max(...rs.map(r=>r.right))+pad,bottom:Math.max(...rs.map(r=>r.bottom))+pad}}
+function tourScroll(els){const e=els[0];if(!e)return;if(e.closest('#sidebar,.sidebar-rail,.mobile-menu')){e.scrollIntoView({block:'nearest'});return}
+  const head=$('main > header')?.getBoundingClientRect().bottom||0;window.scrollTo({top:Math.max(0,scrollY+e.getBoundingClientRect().top-head-24),behavior:'auto'})}
+// Card goes beside the target (right, left, below, above); a target taller than the room left is cropped so the card fits below it.
+function placeTour(){tourFrame=0;if(!tour.open)return;const vw=innerWidth,vh=innerHeight,m=12,gap=16,w=tour.offsetWidth,h=tour.offsetHeight;
+  const clamp=(v,lo,hi)=>Math.min(Math.max(v,lo),Math.max(lo,hi)),els=tourTargets(TOUR[tourIndex]);let r=tourRect(els);
+  // Page content scrolls under the sticky header, so only that part is cropped at the header's edge.
+  if(r){const head=els[0].closest('main')&&!els[0].closest('main > header')?$('main > header').getBoundingClientRect().bottom:0;
+    r={left:Math.max(r.left,4),right:Math.min(r.right,vw-4),top:Math.max(r.top,head+4),bottom:Math.min(r.bottom,vh-4)};if(r.bottom-r.top<12||r.right-r.left<12)r=null}
+  let side='none',x=(vw-w)/2,y=(vh-h)/2;
+  if(r){const fits={right:r.right+gap+w<=vw-m,left:r.left-gap-w>=m,bottom:r.bottom+gap+h<=vh-m,top:r.top-gap-h>=m};
+    if(!fits.right&&!fits.left&&!fits.bottom&&!fits.top&&r.top+120+gap+h<=vh-m){r.bottom=vh-m-h-gap;fits.bottom=true}
+    side=['right','left','bottom','top'].find(k=>fits[k])||'inside';
+    if(side==='right'||side==='left'){x=side==='right'?r.right+gap:r.left-gap-w;y=clamp(r.top,m,vh-m-h)}
+    else if(side==='bottom'||side==='top'){x=clamp(r.right-r.left>w?r.left:(r.left+r.right-w)/2,m,vw-m-w);y=side==='bottom'?r.bottom+gap:r.top-gap-h}
+    else{x=vw-m-w;y=vh-m-h}
+    const arrow=side==='right'||side==='left'?clamp((Math.max(r.top,y)+Math.min(r.bottom,y+h))/2-y,22,h-22):clamp((Math.max(r.left,x)+Math.min(r.right,x+w))/2-x,22,w-22);
+    tour.style.setProperty('--arrow',arrow+'px');Object.assign(tourSpot.style,{left:r.left+'px',top:r.top+'px',width:r.right-r.left+'px',height:r.bottom-r.top+'px'})}
+  else Object.assign(tourSpot.style,{left:vw/2+'px',top:vh/2+'px',width:'0px',height:'0px'});
+  tourSpot.classList.toggle('empty',!r);tour.dataset.side=side;tour.style.left=Math.round(x)+'px';tour.style.top=Math.round(y)+'px'}
+const queueTour=()=>{if(!tourFrame)tourFrame=requestAnimationFrame(placeTour)};
 function showTourStep(){const s=TOUR[tourIndex];$('#tour-step').textContent=`${tourIndex+1} / ${TOUR.length}`;$('#tour-title').textContent=s.title;$('#tour-text').textContent=s.text;
-  $('#tour-points').replaceChildren(...s.points.map(p=>el('li',null,p)));$('#tour-dots').replaceChildren(...TOUR.map((_,i)=>el('i',i===tourIndex?'on':'')));
+  $('#tour-points').replaceChildren(...(s.points||[]).map(p=>el('li',null,p)));$('#tour-dots').replaceChildren(...TOUR.map((_,i)=>el('i',i===tourIndex?'on':'')));
   show($('#tour-back'),tourIndex>0);$('#tour-next').textContent=tourIndex===TOUR.length-1?'Mulai dari langkah 1 →':'Lanjut';
-  go(s.page);$$('.tour-focus').forEach(b=>b.classList.remove('tour-focus'));$$(`.nav-step[data-page="${s.page}"],.rail-step[data-rail-page="${s.page}"]`).forEach(b=>b.classList.add('tour-focus'))}
-function openTour(){tourIndex=0;if(!tour.open)tour.showModal();showTourStep();$('#tour-next').focus()}
-function closeTour(){tourStorage(s=>s.setItem(TOUR_KEY,'done'));$$('.tour-focus').forEach(b=>b.classList.remove('tour-focus'));if(tour.open)tour.close()}
+  if(location.hash.slice(1)!==s.page||$('#page-'+s.page).hidden)go(s.page);
+  const els=tourTargets(s);tourScroll(els);tourWatch?.disconnect();tourWatch=new ResizeObserver(queueTour);tourWatch.observe(tour);for(const e of els)tourWatch.observe(e);
+  // Pages fill in after their data loads; re-place once that settles.
+  placeTour();for(const ms of [150,500,1200])setTimeout(()=>{if(TOUR[tourIndex]===s)placeTour()},ms)}
+function openTour(){tourIndex=0;show(tourSpot);if(!tour.open)tour.showModal();addEventListener('resize',queueTour);addEventListener('scroll',queueTour,true);addEventListener('transitionend',queueTour,true);showTourStep();$('#tour-next').focus()}
+function closeTour(){tourStorage(s=>s.setItem(TOUR_KEY,'done'));tourWatch?.disconnect();tourWatch=null;removeEventListener('resize',queueTour);removeEventListener('scroll',queueTour,true);removeEventListener('transitionend',queueTour,true);show(tourSpot,false);if(tour.open)tour.close()}
 const tourSeen=()=>tourStorage(s=>s.getItem(TOUR_KEY))==='done';
 function maybeTour(){if(!tourSeen()&&!$('#locked').open)setTimeout(()=>{if(!tourSeen()&&!document.querySelector('dialog[open]'))openTour()},600)}
-$('#tour-next').onclick=()=>{if(tourIndex<TOUR.length-1){tourIndex++;showTourStep()}else{closeTour();go('add')}};
-$('#tour-back').onclick=()=>{if(tourIndex>0){tourIndex--;showTourStep()}};
+const tourNext=()=>{if(tourIndex<TOUR.length-1){tourIndex++;showTourStep()}else{closeTour();go('add');scrollTo(0,0)}},tourBack=()=>{if(tourIndex>0){tourIndex--;showTourStep()}};
+$('#tour-next').onclick=tourNext;$('#tour-back').onclick=tourBack;
+tour.addEventListener('keydown',e=>{if(e.key==='ArrowRight'){e.preventDefault();tourNext()}else if(e.key==='ArrowLeft'){e.preventDefault();tourBack()}});
 $('#tour-skip').onclick=closeTour;tour.addEventListener('cancel',e=>{e.preventDefault();closeTour()});
 $('#home-tour').onclick=openTour;$('#tour-replay').onclick=()=>{closeProfile();openTour()};
 
@@ -455,7 +500,11 @@ toggle.onclick=()=>{const open=document.body.classList.toggle('nav-open');toggle
 $('#nav-backdrop').onclick=closeNav;$('#close-sidebar').onclick=closeNav;
 $('#collapse-sidebar').onclick=()=>document.body.classList.add('rail');
 $('#rail-toggle').onclick=()=>document.body.classList.remove('rail');
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeNav();closeProfile()}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeNav();closeProfile();closeScope()}});
+const scopeBtn=$('#scope-toggle');
+function closeScope(){document.querySelector('.topbar').classList.remove('scope-open');scopeBtn.setAttribute('aria-expanded','false')}
+scopeBtn.onclick=e=>{e.stopPropagation();const open=!document.querySelector('.topbar').classList.contains('scope-open');document.querySelector('.topbar').classList.toggle('scope-open',open);scopeBtn.setAttribute('aria-expanded',String(open))};
+document.addEventListener('click',e=>{if(!e.target.closest('#scope-bar,#scope-toggle'))closeScope()});
 
 // ─ Sidebar resize (210–420px seperti Notes) ─
 $('#resize-handle').addEventListener('pointerdown',e=>{e.preventDefault();const move=ev=>{const w=Math.min(420,Math.max(210,ev.clientX));document.documentElement.style.setProperty('--sb-w',w+'px')};
@@ -567,7 +616,7 @@ function renderStatus(){const s=lastStatus;if(!s)return;const m=s.mcp,skillCount
   if($('#install-counts').innerHTML!==counts)$('#install-counts').innerHTML=counts;
   $('#stat-installed').textContent=skillCount;$('#stat-config').textContent=m.valid===false?'Config error':mcpCount?'MCP dikonfigurasi':'MCP belum dikonfigurasi';renderSkills();renderMcp()}
 document.addEventListener('visibilitychange',()=>{if(document.hidden)stopStatusPoll();else if(statusPollAllowed())loadStatus()});
-$('#refresh-status').onclick=()=>loadStatus();
+$('#refresh-status').onclick=()=>{loadStatus();loadAgents()};
 const advanced=$('#advanced-status');let advancedTrigger=null;
 $('#open-advanced').onclick=()=>{advancedTrigger=document.activeElement;advanced.showModal();$('#close-advanced').focus()};
 $('#close-advanced').onclick=()=>closeCheckDialog(advanced);
@@ -588,7 +637,7 @@ function renderSources(){const repos=[['MONOREPO-SKILLS','monorepo'],['GOOGLE-AP
 let repoPreview=null,savedRepos=[],repoGeneration=0,repoBusy=false;
 const repoModal=$('#repo-modal');
 function resetGithub(){repoGeneration++;repoPreview=null;$('#repo-modal-save').disabled=repoBusy;show($('#repo-modal-preview'),false);$('#repo-modal-feedback').textContent='Tempel URL, lalu Simpan. Deteksi dilakukan otomatis.'}
-function renderRepos(){const host=$('#saved-repos');if(!savedRepos.length){host.textContent='Belum ada repository tersimpan.';return}
+function renderRepos(){const host=$('#saved-repos');if(!savedRepos.length){host.replaceChildren(emptyState('Belum ada repositori tersimpan. Simpan repo favorit supaya cepat dipakai lagi.','+ Tambah repositori',()=>$('#add-repo').click()));return}
  host.replaceChildren(...savedRepos.map(row=>{const card=document.createElement('article');card.className='catalog-card';card.innerHTML=`<strong>${esc(row.repo)}</strong><small>${esc(row.url)}</small><small>Terdeteksi: Skills ${row.skills.length} · MCP ${row.mcp.length}. Bukan bukti terpasang.</small>`;
  const actions=document.createElement('div');actions.className='repo-actions';const copy=document.createElement('button');copy.type='button';copy.className='copy-btn secondary';copy.textContent='Salin';copy.setAttribute('aria-label','Salin URL '+row.repo);copy.onclick=async()=>{try{await navigator.clipboard.writeText(row.url);copy.textContent='Tersalin';setTimeout(()=>copy.textContent='Salin',1400)}catch{status('Gagal menyalin. Pilih teks lalu salin manual.',true)}};
  const del=document.createElement('button');del.type='button';del.className='secondary repo-delete';del.textContent='Hapus';del.onclick=()=>busy(del,'Menghapus bookmark…',async()=>{await post('/api/repos/delete',{url:row.url});savedRepos=savedRepos.filter(x=>x.url!==row.url);renderRepos();done('Bookmark dihapus.')});actions.append(copy,del);card.append(actions);return card}))}
@@ -668,7 +717,7 @@ $('#force-antigravity').onclick=()=>{if(checkBusy||$('#force-antigravity').hidde
 $('#force-confirm').addEventListener('close',()=>{if($('#force-confirm').returnValue==='confirm')restartIde(true)});
 
 // ─ Activity ─
-function renderActivity(){$('#activity-log').innerHTML=activity.length?activity.map(a=>`<li class="${a.err?'error':''}"><time>${a.at.toLocaleTimeString()}</time> ${esc(a.t)}</li>`).join(''):'<li class="muted">Belum ada aktivitas di sesi ini.</li>'}
+function renderActivity(){$('#activity-log').innerHTML=activity.length?activity.map(a=>`<li class="${a.err?'error':''}"><time>${a.at.toLocaleTimeString()}</time> ${esc(a.t)}</li>`).join(''):'<li class="empty-state">Belum ada aktivitas di sesi ini.</li>'}
 $('#clear-activity').onclick=()=>{activity.length=0;renderActivity()};
 
 

@@ -39,7 +39,7 @@ test('Chrome pointer wizard: pending guards, retry, steps, callback, uninstall, 
   // Status Config follows external disk changes; no install route used here.
   await run("catalog.skills=[{id:'external-live'},{id:'missing-live'}];catalog.mcpServers.push({id:'missing-live-mcp'});go('status')");
   await until(()=>run("document.querySelector('#status-view').textContent.includes('missing-live')"));
-  assert.equal(await run("document.querySelectorAll('#status-view > article').length===2&&document.querySelectorAll('#page-status .status-guide').length===1&&document.querySelectorAll('#page-status .status-guide details').length===3"),true);
+  assert.equal(await run("document.querySelectorAll('#status-view > article').length===2&&document.querySelectorAll('#page-status .status-guide').length===1&&document.querySelectorAll('#page-status .status-guide details').length===4"),true);
   const liveDir=path.join(home,'.gemini','config','skills','external-live');fs.mkdirSync(liveDir,{recursive:true});fs.writeFileSync(path.join(liveDir,'SKILL.md'),'External live fixture');
   await until(()=>run("[...document.querySelectorAll('#status-view .disk-row')].some(r=>r.textContent.includes('external-live')&&r.textContent.includes('FILE ADA'))"));
   assert.equal(await run("[...document.querySelectorAll('#status-view .disk-row')].some(r=>r.textContent.includes('missing-live')&&r.querySelector('.pill.bad')?.textContent==='BELUM ADA')"),true);
