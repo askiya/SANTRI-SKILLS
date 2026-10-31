@@ -101,7 +101,7 @@ test('manifest: ChatGPT host + content script, no extra Chrome permissions', () 
 });
 
 test('side panel offers "Pasang ke ChatGPT" and verifies premium first', () => {
-  const card = require('../extension/catalog.js').renderCard({ id: 1, title: 'Demo', type: 'skill', description: 'x' });
+  const card = require('../extension/catalog.js').renderCard({ id: 1, title: 'Demo', type: 'skill', description: 'x' }, 'chatgpt');
   assert.ok(card.includes('data-action="install-chatgpt"'));
   assert.ok(card.includes('Pasang ke ChatGPT'));
   const code = read('sidepanel.js');

@@ -30,6 +30,18 @@ Persetujuan berasal dari server (`consent.version` di catalog, `POST /api/skills
 
 Hak akses dicek oleh API Santriverse, bukan oleh extension: setiap request `/api/skills/*` membaca ulang status premium member (`SkillsAuthMiddleware`). Sebelum memasang, panel memanggil `GET /api/skills/session` (`verifyPremium()`). Jawaban `403 premium_required` (membership berakhir, atau akun belum Premium saat login) menghapus sesi dan menampilkan halaman **Khusus Premium** dengan tombol upgrade ke `https://santriverse.my.id/checkout`.
 
+## Tab platform (Gemini · ChatGPT · Claude)
+
+Katalog dibagi tiga tab. Admin memilih platform tiap paket di `santriverse.my.id/admin/skills` (kolom `platforms` dari `/api/skills/catalog`); paket hanya muncul di tab yang dicentang. Server lama tanpa `platforms` → skill tampil di Gemini + ChatGPT, Gem hanya di Gemini (`platformsOf()` di `catalog.js`).
+
+- Tab awal mengikuti tab browser aktif (gemini.google.com / chatgpt.com), lalu tab terakhir diingat di `localStorage`.
+- Tiap kartu: satu tombol utama warna platform + **⇩ ZIP** dalam format platform itu (Gemini: paket asli · ChatGPT: plugin · Claude: folder `<nama>/SKILL.md`).
+- Status per platform di `chrome.storage.local`: `install_status`, `chatgpt_status`, `claude_status`. Versi katalog lebih baru → **Update tersedia**.
+
+## Pasang ke Claude (panduan)
+
+`claude-skill.js` menyiapkan ZIP Claude (satu folder bernama skill di root ZIP), menolak nama yang memuat `claude`/`anthropic` atau `description` > 1024 karakter, dan memberi peringatan bila > 200 karakter. Claude langsung membuat skill saat ZIP diunggah (tanpa layar review), jadi member yang mengunggah lewat **Customize → Skills → + → Create skill → Upload a skill**. Tombol **Saya sudah menyelesaikan** mencatat status sebagai laporan member. Tidak ada izin host `claude.ai`.
+
 ## Pasang ke Gemini (2 klik)
 
 Sejak Oktober 2026 Skills Gemini ada di **Customize → Skills** (`gemini.google.com/customize/skills`; URL lama `/skills` di-redirect ke sana) dengan tombol **Create → Upload** yang menerima `SKILL.md`, folder, atau ZIP dengan `SKILL.md` di folder utama. Alur **Pasang ke Gemini**:
@@ -66,7 +78,7 @@ Fallback manual: **Download ZIP ChatGPT** → chatgpt.com/plugins → + → Ungg
 Dari root repository:
 
 ```bash
-node --test test/extension.test.js test/extension-security.test.js test/extension-member-flow.test.js test/extension-layout.test.js test/extension-gemini-install.test.js test/extension-chatgpt-install.test.js test/extension-store-package.test.js
+node --test test/extension.test.js test/extension-security.test.js test/extension-member-flow.test.js test/extension-layout.test.js test/extension-gemini-install.test.js test/extension-chatgpt-install.test.js test/extension-platforms.test.js test/extension-store-package.test.js
 ```
 
 Tidak ada runtime package tambahan, secret, atau konfigurasi repository. Load unpacked tidak butuh build step.

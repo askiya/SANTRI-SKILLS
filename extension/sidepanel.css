@@ -20,3 +20,18 @@
 .btn-download.wide{grid-column:1/-1}
 .card-desc{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .target-badge{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.12em;padding:3px 8px;border-radius:20px;background:var(--surface2);color:var(--accent2);margin-left:6px;vertical-align:middle}
+/* Platform tabs: one primary install button per card, ZIP in that platform's format */
+.platform-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:13px}
+.ptab{display:flex;align-items:center;justify-content:center;gap:6px;min-width:0;border:0;border-radius:10px;padding:8px 6px;background:none;color:var(--muted);font:inherit;font-size:12px;font-weight:750;cursor:pointer}
+.ptab:hover{color:var(--text)}
+.ptab:focus-visible{outline:2px solid var(--accent2);outline-offset:1px}
+.ptab[aria-selected="true"]{background:var(--surface);color:var(--text);box-shadow:0 1px 3px #0003}
+.ptab-count{font-size:10px;min-width:18px;padding:1px 5px;border-radius:20px;background:var(--surface2);color:var(--muted)}
+.ptab-gemini[aria-selected="true"] .ptab-count{background:var(--accent);color:#fff}
+.ptab-chatgpt[aria-selected="true"] .ptab-count{background:#1f8f6a;color:#fff}
+.ptab-claude[aria-selected="true"] .ptab-count{background:#d97757;color:#fff}
+.skill-card .card-footer{grid-template-columns:minmax(0,1fr) auto}
+.btn-main:only-of-type{grid-column:1/-1}
+.btn-zip{padding:12px 13px;font-size:12px;white-space:nowrap}
+.btn-claude{background:#d97757;color:#fff}
+[data-theme="light"] .btn-claude{background:#c4613f}

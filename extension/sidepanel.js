@@ -42,7 +42,7 @@
     currentSession = null;
     catalogItems = [];
     hide($('#logout-btn'));
-    $('#premium-text').textContent = message || 'Akun ini belum Premium. Upgrade untuk memasang Skills Santriverse langsung ke Gemini dan ChatGPT.';
+    $('#premium-text').textContent = message || 'Akun ini belum Premium. Upgrade untuk memasang Skills Santriverse ke Gemini, ChatGPT, dan Claude.';
     only(premiumSection);
   }
   function handleAuthError(error, fallback) {
@@ -101,8 +101,9 @@
 
   // ── Install status (local, non-sensitive) ─────────────────────────────────
   // What each target showed after the last assisted install:
-  // install_status (Gemini) / chatgpt_status (ChatGPT): { [packageId]: { name, version, status } }.
-  const STATUS_KEYS = { gemini: 'install_status', chatgpt: 'chatgpt_status' };
+  // install_status (Gemini) / chatgpt_status (ChatGPT) / claude_status (Claude, member-reported):
+  // { [packageId]: { name, version, status, reported? } }.
+  const STATUS_KEYS = { gemini: 'install_status', chatgpt: 'chatgpt_status', claude: 'claude_status' };
   async function readStatuses(target = 'gemini') {
     const key = STATUS_KEYS[target];
     try { return (await chrome.storage.local.get(key))[key] || {}; } catch { return {}; }
@@ -122,6 +123,34 @@
   let catalogItems = [];
   let catalogConsent = null;
 
+  // ── Platform tabs ─────────────────────────────────────────────────────────
+  let activePlatform = (() => { try { return localStorage.getItem('platform'); } catch { return null; } })();
+  if (!PLATFORM_IDS.includes(activePlatform)) activePlatform = 'gemini';
+  const PLATFORM_HOSTS = { 'gemini.google.com': 'gemini', 'chatgpt.com': 'chatgpt', 'claude.ai': 'claude' };
+  /** Follow the page the member is on (URLs are visible only for our host permissions). */
+  async function platformFromActiveTab() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return PLATFORM_HOSTS[new URL(tab?.url || '').hostname] || null;
+    } catch { return null; }
+  }
+  function selectPlatform(platform) {
+    if (!PLATFORM_IDS.includes(platform)) return;
+    activePlatform = platform;
+    try { localStorage.setItem('platform', platform); } catch { /* storage blocked */ }
+    renderCatalog();
+  }
+  $('#platform-tabs').addEventListener('click', (e) => {
+    const tab = e.target.closest('[data-platform]');
+    if (tab) selectPlatform(tab.dataset.platform);
+  });
+  $('#platform-tabs').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const at = PLATFORM_IDS.indexOf(activePlatform);
+    selectPlatform(PLATFORM_IDS[(at + (e.key === 'ArrowRight' ? 1 : PLATFORM_IDS.length - 1)) % PLATFORM_IDS.length]);
+    $(`#platform-tabs [data-platform="${activePlatform}"]`)?.focus();
+  });
+
   async function loadCatalog() {
     const grid = $('#catalog-grid');
     const empty = $('#empty-state');
@@ -140,8 +169,8 @@
         return;
       }
       only(catalogSection);
-      if (!catalogItems.length) { grid.innerHTML = ''; show(empty); return; }
-      hide(empty);
+      const fromTab = await platformFromActiveTab();
+      if (fromTab) activePlatform = fromTab;
       await renderCatalog();
       refreshDetection();
     } catch (err) {
@@ -152,10 +181,19 @@
   }
 
   async function renderCatalog() {
-    const [gemini, chatgpt] = await Promise.all([readStatuses('gemini'), readStatuses('chatgpt')]);
-    $('#catalog-grid').innerHTML = catalogItems
-      .map(item => renderCard({ ...item, status: statusFor(item, gemini), chatgptStatus: statusFor(item, chatgpt) }))
+    const platform = activePlatform;
+    const stored = await readStatuses(platform);
+    const counts = Object.fromEntries(PLATFORM_IDS.map(id => [id, catalogItems.filter(i => platformsOf(i).includes(id)).length]));
+    $('#platform-tabs').innerHTML = renderTabs(platform, counts);
+    const items = catalogItems.filter(i => platformsOf(i).includes(platform));
+    $('#catalog-grid').innerHTML = items
+      .map(item => renderCard({ ...item, status: statusFor(item, stored), reported: Boolean(stored[item.id]?.reported) }, platform))
       .join('');
+    const empty = $('#empty-state');
+    if (items.length) { hide(empty); return; }
+    $('#empty-title').textContent = catalogItems.length ? `Belum ada skill untuk ${PLATFORMS[platform].label}` : 'Belum ada item';
+    $('#empty-text').textContent = catalogItems.length ? 'Coba tab platform lain.' : 'Katalog premium belum tersedia.';
+    show(empty);
   }
 
   /** If a Gemini Skills tab is already open, mark skills Gemini lists there. */
@@ -230,6 +268,10 @@
         const { plugin } = await chatGptPluginFrom(blob, item);
         saveBytes(plugin.zip, plugin.fileName);
         showNotice('Plugin ChatGPT terunduh. Upload di chatgpt.com/plugins → + → Unggah plugin.', 'good');
+      } else if (target === 'claude') {
+        const pkg = buildClaudeZip(prepareSkillPackage(await readZip(await blob.arrayBuffer())), item);
+        saveBytes(pkg.zip, pkg.fileName);
+        showNotice(`ZIP Claude terunduh. Upload di claude.ai → Customize → Skills → + → Upload a skill.${pkg.warnings.length ? ' ' + pkg.warnings.join(' ') : ''}`, pkg.warnings.length ? 'warn' : 'good');
       } else {
         saveBytes(new Uint8Array(await blob.arrayBuffer()), `${item.slug}-${item.version}.zip`);
         showNotice('ZIP terunduh dan terverifikasi. Upload langsung ke Gemini, tidak perlu diekstrak.', 'good');
@@ -413,6 +455,10 @@
       }
       installItem(item, action === 'install-chatgpt' ? 'chatgpt' : 'gemini');
     }
+    if (action === 'install-claude') {
+      if (!item) return showNotice('Paket tidak tersedia.', 'warn');
+      showTutorial('skill', id, 'claude');
+    }
     if (action === 'open') {
       if (type === 'gem' && item?.gem_url) {
         chrome.tabs.create({ url: item.gem_url });
@@ -420,25 +466,39 @@
       }
       showTutorial(type, id);
     }
-    if (action === 'download') downloadItem(item, btn);
+    if (action === 'download') downloadItem(item, btn, btn.dataset.target || 'gemini');
   });
 
   // ── Tutorial (manual fallback) ────────────────────────────────────────────
+  const TUTORIALS = {
+    gemini: {
+      title: 'Pasang di Gemini', download: 'Download ZIP', open: 'Buka Gemini Skills',
+      honesty: 'Gemini menerima file ZIP langsung. Konfirmasi akhir (klik Create/Buat) selalu dilakukan member di Gemini.',
+    },
+    chatgpt: {
+      title: 'Pasang di ChatGPT', download: 'Download ZIP ChatGPT', open: 'Buka ChatGPT Plugins',
+      honesty: 'ChatGPT menerima ZIP plugin langsung. Konfirmasi akhir (klik Instal Plugin) selalu dilakukan member di ChatGPT.',
+    },
+    claude: {
+      title: 'Pasang di Claude', download: 'Download ZIP Claude', open: 'Buka Claude Skills',
+      honesty: 'Claude langsung membuat skill begitu ZIP diunggah (tanpa layar review), jadi unggahan selalu kamu yang memilih. Skill butuh "Code execution" aktif.',
+    },
+  };
+
   function showTutorial(type, itemId, target = 'gemini') {
-    const chatgpt = target === 'chatgpt' && type !== 'gem';
-    const steps = chatgpt && typeof getChatGptManualSteps === 'function'
-      ? getChatGptManualSteps()
-      : typeof getManualSteps === 'function' ? getManualSteps(type) : ['Buka Gemini, lalu pasang secara manual.'];
+    if (type === 'gem' || !TUTORIALS[target]) target = 'gemini';
+    const steps = target === 'chatgpt' && typeof getChatGptManualSteps === 'function' ? getChatGptManualSteps()
+      : target === 'claude' && typeof getClaudeManualSteps === 'function' ? getClaudeManualSteps()
+        : typeof getManualSteps === 'function' ? getManualSteps(type) : ['Buka Gemini, lalu pasang secara manual.'];
+    const copy = TUTORIALS[target];
     $('#tutorial-steps').innerHTML = steps.map(s => `<li>${esc(s)}</li>`).join('');
     tutorialSection.dataset.itemId = itemId;
     tutorialSection.dataset.itemType = type;
-    tutorialSection.dataset.target = chatgpt ? 'chatgpt' : 'gemini';
-    $('#tutorial-title').textContent = chatgpt ? 'Pasang di ChatGPT' : 'Pasang di Gemini';
-    $('#tutorial-download').textContent = chatgpt ? 'Download ZIP ChatGPT' : 'Download ZIP';
-    $('#tutorial-open').textContent = chatgpt ? 'Buka ChatGPT Plugins' : 'Buka Gemini Skills';
-    $('#tutorial-honesty').textContent = chatgpt
-      ? 'ChatGPT menerima ZIP plugin langsung. Konfirmasi akhir (klik Instal Plugin) selalu dilakukan member di ChatGPT.'
-      : 'Gemini menerima file ZIP langsung. Konfirmasi akhir (klik Create/Buat) selalu dilakukan member di Gemini.';
+    tutorialSection.dataset.target = target;
+    $('#tutorial-title').textContent = copy.title;
+    $('#tutorial-download').textContent = copy.download;
+    $('#tutorial-open').textContent = copy.open;
+    $('#tutorial-honesty').textContent = copy.honesty;
     type === 'gem' ? hide($('#tutorial-download')) : show($('#tutorial-download'));
     only(tutorialSection);
   }
@@ -451,13 +511,21 @@
   $('#tutorial-open').addEventListener('click', () => {
     const type = tutorialSection.dataset.itemType || 'skill';
     if (tutorialSection.dataset.target === 'chatgpt' && typeof openChatGptPluginsPage === 'function') return openChatGptPluginsPage();
+    if (tutorialSection.dataset.target === 'claude' && typeof openClaudeSkillsPage === 'function') return openClaudeSkillsPage();
     if (typeof openGeminiPage === 'function') openGeminiPage(type);
     else chrome.tabs.create({ url: 'https://gemini.google.com/customize/skills' });
   });
 
-  $('#member-confirm').addEventListener('click', () => {
+  $('#member-confirm').addEventListener('click', async () => {
+    // Claude has no page detection yet, so the member's report is what marks it installed
+    // (and lets a newer catalog version show "Update tersedia").
+    const item = catalogItems.find(p => String(p.id) === String(tutorialSection.dataset.itemId));
+    if (item && tutorialSection.dataset.target === 'claude') {
+      await writeStatus(item.id, { name: item.slug, version: item.version, status: 'detected', reported: true }, 'claude');
+    }
     showNotice('Status dicatat sebagai laporan member. Bukan verifikasi otomatis.', 'info');
     only(catalogSection);
+    renderCatalog();
   });
 
   // ── Logout ────────────────────────────────────────────────────────────────

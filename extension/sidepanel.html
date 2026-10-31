@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark"><img src="icons/icon-32.png" alt=""></span><div><strong>Santri Skills</strong><small>Gemini &amp; ChatGPT companion</small></div></div>
+    <div class="brand"><span class="brand-mark"><img src="icons/icon-32.png" alt=""></span><div><strong>Santri Skills</strong><small>Gemini, ChatGPT &amp; Claude</small></div></div>
     <button id="theme-toggle" class="icon-btn" aria-label="Ganti theme" title="Ganti theme">☼</button>
   </header>
 
@@ -18,7 +18,7 @@
     <section id="login-section" class="panel">
       <span class="login-mark" aria-hidden="true"><img src="icons/icon-128.png" alt=""></span>
       <span class="eyebrow">SANTRIVERSE SKILLS</span>
-      <h1>Skills kamu,<br>siap di Gemini &amp; ChatGPT.</h1>
+      <h1>Skills kamu,<br>siap di Gemini, ChatGPT &amp; Claude.</h1>
       <p>Hubungkan akun Premium melalui Santriverse. Password tetap di situs resmi, bukan di extension.</p>
       <button id="login-btn" class="btn btn-primary">Hubungkan akun Santriverse</button>
       <p class="security-note">Sesi hanya disimpan selama browser terbuka.</p>
@@ -39,7 +39,7 @@
     <section id="premium-section" class="panel hidden" aria-labelledby="premium-title">
       <span class="eyebrow">KHUSUS PREMIUM</span>
       <h2 id="premium-title">Skills untuk Member Premium</h2>
-      <p id="premium-text">Akun ini belum Premium. Upgrade untuk memasang Skills Santriverse langsung ke Gemini dan ChatGPT.</p>
+      <p id="premium-text">Akun ini belum Premium. Upgrade untuk memasang Skills Santriverse ke Gemini, ChatGPT, dan Claude.</p>
       <button id="upgrade-btn" class="btn btn-primary">Upgrade ke Premium</button>
       <button id="premium-recheck" class="btn btn-secondary">Sudah upgrade? Hubungkan ulang</button>
     </section>
@@ -49,8 +49,9 @@
         <div><span class="eyebrow">KATALOG</span><h2>Skills &amp; Gems</h2></div>
         <button id="refresh-btn" class="icon-btn" aria-label="Muat ulang katalog" title="Muat ulang">↻</button>
       </div>
-      <div id="catalog-grid" class="catalog-grid"></div>
-      <div id="empty-state" class="empty hidden"><strong>Belum ada item</strong><p>Katalog premium belum tersedia.</p></div>
+      <div id="platform-tabs" class="platform-tabs" role="tablist" aria-label="Platform"></div>
+      <div id="catalog-grid" class="catalog-grid" role="tabpanel"></div>
+      <div id="empty-state" class="empty hidden"><strong id="empty-title">Belum ada item</strong><p id="empty-text">Katalog premium belum tersedia.</p></div>
     </section>
 
     <section id="install" class="panel hidden" aria-labelledby="install-title" aria-live="polite">
@@ -83,6 +84,7 @@
   <script src="gemini-adapter.js"></script>
   <script src="chatgpt-plugin.js"></script>
   <script src="chatgpt-adapter.js"></script>
+  <script src="claude-skill.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
