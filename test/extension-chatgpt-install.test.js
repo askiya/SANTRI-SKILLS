@@ -108,6 +108,38 @@ test('menu labels match ChatGPT as of 31 Oct 2026 and the older Indonesian UI', 
   assert.doesNotMatch('Create plugin', CGPT.uploadItem);
   assert.doesNotMatch('Add custom MCP server', CGPT.addButton);
   assert.match('Add plugin', CGPT.submit);
+  // Plugin page "⋯" menu as inspected 1 Nov 2026.
+  assert.match('More actions', CGPT.moreActions);
+  assert.match('Upload new version', CGPT.uploadVersion);
+  for (const label of ['Edit plugin', 'Uninstall', 'Download plugin ZIP', 'Delete plugin']) assert.doesNotMatch(label, CGPT.uploadVersion);
+  assert.match('Version', CGPT.versionLabel);
+});
+
+test('side panel updates an installed ChatGPT plugin in place instead of downloading', () => {
+  const code = read('sidepanel.js');
+  const handler = code.slice(code.indexOf("if (action === 'install-chatgpt')"), code.indexOf("if (action === 'open')"));
+  assert.match(handler, /installItem\(item, 'chatgpt', \{ updateOf: known\.pluginId \}\)/);
+  assert.doesNotMatch(handler, /downloadItem\(/);
+  const install = code.slice(code.indexOf('async function installItem'));
+  assert.match(install, /assistChatGptUpdate\(plugin, updateOf, item\.version\)/);
+  assert.match(install, /waitUntilChatGptVersion\(/);
+});
+
+test('panel confirms an update once the plugin page shows the new version', async () => {
+  const replies = [
+    { pluginId: 'Plugin_old1', version: '1.0.0', dialogOpen: true },
+    { pluginId: 'Plugin_old1', version: '1.0.0', dialogOpen: false },
+    { pluginId: 'Plugin_old1', version: '1.2.0', dialogOpen: false },
+  ];
+  const reloads = [];
+  const ctx = {
+    module: { exports: {} }, setTimeout: (fn) => setTimeout(fn, 0), Date, Set, String, Promise,
+    chrome: { tabs: { sendMessage: async () => replies.shift(), reload: async (id) => { reloads.push(id); } } },
+  };
+  vm.runInNewContext(read('chatgpt-adapter.js'), ctx);
+  const done = await ctx.module.exports.waitUntilChatGptVersion(7, 'Plugin_old1', '1.2.0', { timeoutMs: 5000, reloadEvery: 2 });
+  assert.equal(done, true);
+  assert.deepEqual(reloads, [7], 'reloads only while no dialog is open');
 });
 
 test('manifest: ChatGPT host + content script, no extra Chrome permissions', () => {
@@ -203,6 +235,32 @@ function openDialog() {
 }
 </script></body></html>`;
 
+// An installed plugin's page as inspected on 1 Nov 2026: "More actions" menu
+// with "Upload new version", whose dialog has only "Choose file" / "Cancel"
+// (choosing the file uploads it), and the Information list with "Version".
+const FIXTURE_UPDATE = `<!doctype html><html><body><main id="main">
+<h1>Demo Skill</h1><button aria-label="More actions" aria-haspopup="menu" id="more"></button>
+<a href="/settings/plugins-settings/Plugin_old1">Manage</a><button>Try in chat</button>
+<h2>Information</h2><dl><div><dt>Developer</dt><dd>Santriverse</dd></div><div><dt>Version</dt><dd id="version">1.0.0</dd></div></dl>
+</main><div id="menu"></div><div id="dialog-host"></div>
+<script>
+window.__uploaded = null; window.__danger = false;
+document.getElementById('more').addEventListener('pointerdown', () => {
+  document.getElementById('menu').innerHTML = '<div role="menu"><div role="menuitem">Edit plugin</div><div role="menuitem" class="danger">Uninstall</div><div role="menuitem">Download plugin ZIP</div><div role="menuitem" id="upv">Upload new version</div><div role="menuitem" class="danger">Delete plugin</div></div>';
+  document.querySelectorAll('.danger').forEach(el => el.addEventListener('click', () => { window.__danger = true; }));
+  document.getElementById('upv').addEventListener('click', openDialog);
+});
+function openDialog() {
+  document.getElementById('menu').innerHTML = '';
+  document.getElementById('dialog-host').innerHTML = '<div role="dialog"><h2>Upload new version</h2><p>Drop a .zip, .tar.gz, or .tgz file here, or choose a file. Maximum size: 780 MB</p><button>Choose file</button><input type="file" accept="application/zip,.zip,application/gzip,.tar.gz,.tgz" hidden><button>Cancel</button><button>Close dialog</button></div>';
+  const input = document.querySelector('[role=dialog] input');
+  input.addEventListener('change', async () => {${RECORD_UPLOAD}
+    document.getElementById('dialog-host').innerHTML = '';
+    setTimeout(() => { document.getElementById('version').textContent = '1.2.0'; }, 500);
+  });
+}
+</script></body></html>`;
+
 async function withChrome(fixture, fn) {
   const server = http.createServer((_req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(fixture); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -224,9 +282,9 @@ async function withChrome(fixture, fn) {
     ws.onmessage = (e) => { const m = JSON.parse(e.data); if (pending.has(m.id)) { const [r, j] = pending.get(m.id); pending.delete(m.id); m.error ? j(new Error(m.error.message)) : r(m.result); } };
     const call = (method, params = {}) => new Promise((r, j) => { pending.set(++id, [r, j]); ws.send(JSON.stringify({ id, method, params })); });
     const run = async (expression) => { const r = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); assert.ok(!r.exceptionDetails, JSON.stringify(r.exceptionDetails)); return r.result.value; };
-    const load = async () => {
-      await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/plugins` });
-      for (let i = 0; i < 100 && !(await run("!!document.getElementById('add')")); i++) await new Promise(r => setTimeout(r, 50));
+    const load = async (pathname = '/plugins', readyId = 'add') => {
+      await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}${pathname}` });
+      for (let i = 0; i < 100 && !(await run(`!!document.getElementById('${readyId}')`)); i++) await new Promise(r => setTimeout(r, 50));
       // Load the real content script with a stub runtime that exposes its listener.
       await run(`(new Function('chrome', ${JSON.stringify(read('chatgpt-plugins.js'))}))({ runtime: { onMessage: { addListener(fn) { window.__listener = fn; } } } }); 'loaded'`);
     };
@@ -287,6 +345,35 @@ test('older dialog: imports on file choice and lands on the plugin page', { skip
     await run("document.getElementById('install').click()"); // the member's click
     const state = await ask({ type: 'chatgpt:state' });
     assert.equal(state.installOffered, false);
+  });
+});
+
+test('update: "More actions → Upload new version" on the plugin page, nothing destructive', { skip: !CHROME, timeout: 60000 }, async () => {
+  await withChrome(FIXTURE_UPDATE, async ({ run, load, ask }) => {
+    await load('/plugins/Plugin_old1', 'more');
+    let state = await ask({ type: 'chatgpt:state' });
+    assert.equal(state.version, '1.0.0');
+
+    const result = await ask({ ...UPLOAD, type: 'chatgpt:update', version: '1.2.0' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.match(result.stage, /^(closed|updated)$/);
+    assert.equal(result.pluginId, 'Plugin_old1');
+    assert.deepEqual(await run('window.__uploaded'), EXPECTED_UPLOAD);
+    assert.equal(await run('window.__danger'), false, 'never Uninstall/Delete');
+
+    await new Promise(r => setTimeout(r, 700));
+    state = await ask({ type: 'chatgpt:state' });
+    assert.equal(state.version, '1.2.0');
+
+    // Already on that version (e.g. uploaded by hand): nothing is uploaded again.
+    await run('window.__uploaded = null');
+    const again = await ask({ ...UPLOAD, type: 'chatgpt:update', version: '1.2.0' });
+    assert.equal(again.stage, 'already');
+    assert.equal(await run('window.__uploaded'), null);
+
+    // Off a plugin page the update refuses to act.
+    await load('/plugins', 'more');
+    assert.equal((await ask({ ...UPLOAD, type: 'chatgpt:update', version: '1.2.0' })).stage, 'navigate');
   });
 });
 

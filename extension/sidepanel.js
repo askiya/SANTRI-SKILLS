@@ -324,6 +324,25 @@
       doneTitle: 'Terpasang di ChatGPT ✓',
       doneHint: (_name, title) => `Pakai di chat ChatGPT dengan mengetik @ lalu pilih "${title}".`,
     },
+    // Newer catalog version of a plugin already in ChatGPT: upload over it, never add a duplicate.
+    chatgptUpdate: {
+      eyebrow: 'UPDATE DI CHATGPT',
+      steps: ['Cek akses Premium', 'Unduh & verifikasi paket', 'Bungkus jadi plugin ChatGPT', 'Buka halaman plugin di ChatGPT', 'Upload versi baru', 'Konfirmasi versi di ChatGPT'],
+      failReasons: {
+        navigate: 'Halaman plugin ChatGPT tidak terbuka.',
+        not_found: 'Plugin lama tidak ditemukan di ChatGPT (mungkin sudah dihapus). Tutup panel ini lalu klik "Pasang ke ChatGPT" lagi.',
+        more_actions: 'Tombol ⋯ (More actions) di halaman plugin tidak ditemukan. Pastikan sudah login di chatgpt.com.',
+        upload_menu: 'Menu "Upload new version" tidak muncul.',
+        upload_dialog: 'Dialog "Upload new version" tidak terbuka.',
+        import_failed: 'ChatGPT menolak versi baru.',
+        import_timeout: 'ChatGPT belum menyelesaikan unggahan versi baru.',
+      },
+      waitTitle: 'Mengunggah versi baru',
+      waitHint: 'ZIP versi baru sudah dimasukkan ke dialog "Upload new version" di tab ChatGPT. Bila ChatGPT meminta konfirmasi, klik di sana. Panel ini mendeteksi otomatis begitu versinya berganti.',
+      pendingHint: 'Versi baru belum terlihat. Buka halaman plugin di ChatGPT, cek "Version" di bagian Information, lalu tekan ↻ di katalog.',
+      doneTitle: 'Diperbarui di ChatGPT ✓',
+      doneHint: (_name, title) => `Versi baru aktif. Pakai di chat ChatGPT dengan mengetik @ lalu pilih "${title}".`,
+    },
     claude: {
       eyebrow: 'PASANG KE CLAUDE',
       steps: ['Cek akses Premium', 'Unduh & verifikasi paket', 'Siapkan ZIP Claude', 'Buka Upload skill Claude', 'Isi form upload Claude', 'Klik Upload di tab Claude'],
@@ -357,10 +376,12 @@
     text ? show(hint) : hide(hint);
   }
 
-  async function installItem(item, target = 'gemini') {
+  /** `updateOf`: pluginId of the older version already in ChatGPT (upload a new version over it). */
+  async function installItem(item, target = 'gemini', { updateOf = null } = {}) {
     if (installing) return;
     installing = true;
-    const cfg = TARGETS[target];
+    const update = target === 'chatgpt' && updateOf;
+    const cfg = update ? TARGETS.chatgptUpdate : TARGETS[target];
     currentSteps = cfg.steps;
     const states = [];
     const step = (i, state) => { states[i] = state; renderSteps(states); };
@@ -413,28 +434,41 @@
       step(3, 'active');
       let result;
       try {
-        result = target === 'chatgpt' ? await assistChatGptInstall(plugin)
-          : target === 'claude' ? await assistClaudeInstall(claudePkg)
-            : await assistInstall(skill);
+        result = update ? await assistChatGptUpdate(plugin, updateOf, item.version)
+          : target === 'chatgpt' ? await assistChatGptInstall(plugin)
+            : target === 'claude' ? await assistClaudeInstall(claudePkg)
+              : await assistInstall(skill);
       } catch (err) {
         return fail(3, err.message || 'Halaman tujuan tidak bisa dibuka.');
       }
+      const pluginTitle = plugin?.manifest?.extensions?.['com.openai']?.interface?.displayName || item.title;
       if (!result?.ok) {
-        const at = result?.stage === 'navigate' ? 3 : 4;
+        // A deleted plugin: forget it so the next click adds it afresh.
+        if (update && result?.stage === 'not_found') await writeStatus(item.id, null, 'chatgpt');
+        const at = result?.stage === 'navigate' || result?.stage === 'not_found' ? 3 : 4;
         if (at === 4) step(3, 'done');
         const detail = result?.detail ? ` (${result.detail})` : '';
         return fail(at, `${cfg.failReasons[result?.stage] || 'Pengisian otomatis gagal.'}${detail} Gunakan cara manual.`);
       }
       step(3, 'done');
       step(4, 'done');
+      if (update && result.stage === 'already') {
+        // ChatGPT already has this version (e.g. uploaded by hand): just sync the panel.
+        step(5, 'done');
+        await writeStatus(item.id, { name: skill.name, version: item.version, status: 'detected', pluginId: updateOf }, target);
+        $('#install-title').textContent = cfg.doneTitle;
+        setHint(`ChatGPT sudah memakai versi ${item.version}; status di panel disinkronkan. ${cfg.doneHint(skill.name, pluginTitle)}`, 'good');
+        renderCatalog();
+        return;
+      }
       const skippedNote = (result.skipped?.length ? ` File dilewati (tidak didukung ${PLATFORMS[target].label}): ${result.skipped.join(', ')}.` : '')
         + (claudePkg?.warnings?.length ? ` ${claudePkg.warnings.join(' ')}` : '');
 
       step(5, 'active');
       $('#install-title').textContent = cfg.waitTitle;
       setHint((result.stage === 'imported' && cfg.importedHint || cfg.waitHint) + skippedNote, 'info');
-      const pluginTitle = plugin?.manifest?.extensions?.['com.openai']?.interface?.displayName || item.title;
-      const installed = target === 'chatgpt' ? await waitUntilChatGptInstalled(result.tabId, result.pluginId || null, { title: pluginTitle })
+      const installed = update ? (await waitUntilChatGptVersion(result.tabId, updateOf, item.version) && updateOf)
+        : target === 'chatgpt' ? await waitUntilChatGptInstalled(result.tabId, result.pluginId || null, { title: pluginTitle })
         : target === 'claude' ? await waitUntilClaudeInstalled(result.tabId, skill.name)
           : await waitUntilListed(result.tabId, skill.name);
       if (!installed) {
@@ -470,14 +504,15 @@
       if (!item) return showNotice('Paket tidak tersedia.', 'warn');
       if (!item.file_size || !item.sha256) return showNotice('Paket belum tersedia untuk dipasang.', 'warn');
       if (action === 'install-chatgpt') {
-        // ChatGPT keeps uploaded personal plugins (no delete), so never upload a duplicate:
-        // same version → open it; newer version → guide to "Upload new version".
+        // Never add a duplicate plugin: same version → open it; newer version →
+        // "Upload new version" on the existing plugin's page.
         const known = (await readStatuses('chatgpt'))[item.id];
         if (known?.status === 'detected' && known.pluginId) {
-          chrome.tabs.create({ url: `https://chatgpt.com/plugins/${encodeURIComponent(known.pluginId)}` });
-          if (known.version === item.version) return showNotice('Plugin sudah terpasang di ChatGPT — membuka halamannya.', 'good');
-          await downloadItem(item, btn, 'chatgpt');
-          return showNotice(`Versi ${item.version} siap. Di halaman plugin: Manage / More actions → upload versi baru → pilih ZIP yang baru diunduh.`, 'warn');
+          if (known.version === item.version) {
+            chrome.tabs.create({ url: `https://chatgpt.com/plugins/${encodeURIComponent(known.pluginId)}` });
+            return showNotice('Plugin sudah terpasang di ChatGPT — membuka halamannya.', 'good');
+          }
+          return installItem(item, 'chatgpt', { updateOf: known.pluginId });
         }
       }
       installItem(item, { install: 'gemini', 'install-chatgpt': 'chatgpt', 'install-claude': 'claude' }[action]);

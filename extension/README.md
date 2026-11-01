@@ -78,7 +78,7 @@ ChatGPT menggantikan Custom GPT dengan **Plugins** (Custom GPT pensiun 11 Desemb
 5. **Member yang menekan “Add plugin” lalu “Install plugin”** — extension tidak pernah menekannya. Panel mencatat ID plugin dari halaman plugin, atau dari ikon baru berjudul sama di baris **Installed** (ikon yang sudah ada sebelumnya diabaikan).
 6. Pakai di chat biasa dengan `@Nama Plugin` (teruji di akun Free; file referensi terbaca).
 
-Plugin pribadi hasil upload belum bisa dihapus dari ChatGPT, jadi extension tidak pernah mengunggah duplikat: versi sama → membuka halaman plugin; versi baru → menyiapkan ZIP dan memandu ke **Tindakan plugin → Unggah versi baru**.
+Extension tidak pernah mengunggah plugin duplikat: versi sama → membuka halaman plugin; versi baru (**Update di ChatGPT**) → membuka halaman plugin yang sudah ada, menekan **⋯ More actions → Upload new version** (terverifikasi 1 Nov 2026), lalu memasukkan ZIP versi baru ke dialog itu (dialog tidak punya tombol konfirmasi; memilih file langsung mengunggah). Panel menunggu sampai **Version** di bagian Information berganti. Bila ChatGPT sudah memakai versi itu, status panel cukup disinkronkan tanpa unggah ulang. Menu **Uninstall / Delete plugin** tidak pernah disentuh.
 
 Fallback manual: **Download ZIP ChatGPT** → chatgpt.com/plugins → Add → Upload plugin archive → pilih ZIP → Add plugin → Install plugin.
 
