@@ -99,6 +99,44 @@ test('get_skill_file lists and reads files inside the skill folder only', () => 
   }
 });
 
+test('a failed catalog load is retried on the next call, not cached until restart', async () => {
+  const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'santri-mcp-empty-'));
+  const ready = fakeCache();
+  // Empty cache + 1 ms download timeout: the first load fails at once, without real network use.
+  const child = require('node:child_process').spawn(process.execPath, [CLI, 'mcp-serve'], {
+    stdio: ['pipe', 'pipe', 'ignore'],
+    env: { ...process.env, SANTRI_SKILLS_CACHE: cache, SANTRI_SKILLS_TIMEOUT_MS: '1', SANTRIHUB_BRIDGE_FILE: path.join(cache, 'bridge.json') },
+  });
+  let buffer = '';
+  const waiters = [];
+  child.stdout.on('data', (chunk) => {
+    buffer += chunk;
+    let end;
+    while ((end = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, end);
+      buffer = buffer.slice(end + 1);
+      waiters.shift()?.(JSON.parse(line));
+    }
+  });
+  const ask = (msg) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('MCP reply timeout')), 15000);
+    waiters.push((reply) => { clearTimeout(timer); resolve(reply); });
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...msg }) + '\n');
+  });
+  try {
+    const first = await ask(call(1, 'list_skills', {}));
+    assert.equal(first.result.isError, true);
+    fs.cpSync(ready, cache, { recursive: true }); // back online: the cache is there now
+    const second = await ask(call(2, 'list_skills', {}));
+    assert.notEqual(second.result.isError, true);
+    assert.match(text(second), /demo-appscript/);
+  } finally {
+    child.kill();
+    fs.rmSync(cache, { recursive: true, force: true });
+    fs.rmSync(ready, { recursive: true, force: true });
+  }
+});
+
 test('santri-skills entries of any SantriHub build are recognised; foreign ones are not', () => {
   const { isOurs, ownServerEntry, SERVER_ENTRY, addMcpServer } = require('../src/install');
   const exe = 'C:\\Program Files\\SantriHub\\SantriHub.exe';
