@@ -9,6 +9,7 @@ const path = require('node:path');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'santri-skills-test-'));
 process.env.SANTRI_SKILLS_CACHE = path.join(tmp, 'cache');
+process.env.SANTRIHUB_HOME = path.join(tmp, 'hub'); // hub activity log stays out of the real home
 
 const { loadCatalog, parseFrontmatter } = require('../src/sources');
 const { installSkills, uninstallSkills, addMcpServer, removeMcpServer, skillTargets, mcpConfigPath } = require('../src/install');

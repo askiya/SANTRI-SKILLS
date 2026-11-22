@@ -22,7 +22,7 @@ const { validateSource, validateMcpEntry, loadRegistry } = require('../src/regis
 
 test('paket metadata: bundled sources carry it; bad display fields are dropped, not fatal', () => {
   const reg = loadRegistry();
-  assert.deepEqual(reg.sources.map((s) => [s.id, s.short, s.color, s.starter]), [['appscript', 'Apps Script', 'teal', 'apps-script-architect'], ['monorepo', 'Monorepo', 'purple', 'santriverse-vibe-coding']]);
+  assert.deepEqual(reg.sources.map((s) => [s.id, s.short, s.color, s.starter]), [['appscript', 'Apps Script', 'teal', 'apps-script-builder'], ['monorepo', 'Monorepo', 'purple', 'santriverse-builder']]);
   const base = { id: 'x', repo: 'o/r', branch: 'main', skillsDir: 'skills' };
   const s = validateSource({ ...base, short: '  Pendek  ', color: 'neon', icon: '<b>', starter: 'Bad Id', author: 'A'.repeat(200), description: 'ok', order: 1.5 });
   assert.equal(s.short, 'Pendek');

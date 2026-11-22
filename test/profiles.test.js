@@ -62,6 +62,7 @@ test('dashboard: save a profile from one agent, apply it to another; gateway lis
   try {
     assert.equal((await fetch(base + '/api/profiles')).status, 401);
     assert.equal((await fetch(base + '/api/gateway')).status, 401);
+    assert.equal((await fetch(base + '/api/activity')).status, 401);
     const state = new URL((await post('/api/auth/login', {})).body.url).searchParams.get('state');
     const { csrf } = (await post('/api/auth/callback', { state, ticket: 'ticket_abc' })).body;
     assert.equal((await post('/api/profiles/delete', { name: 'x' })).status, 403, 'CSRF required');
@@ -74,6 +75,12 @@ test('dashboard: save a profile from one agent, apply it to another; gateway lis
     assert.deepEqual(gw['santri-skills'].args.slice(-1), ['mcp-serve']);
     assert.deepEqual((await (await fetch(base + '/api/gateway')).json()).servers, ['cms', 'santri-skills']);
     assert.equal((await post('/api/gateway', { id: 'unknown', enable: true, _csrf: csrf })).status, 400);
+
+    // Hub activity: what agents asked the hub for, read from the folder of the gateway file.
+    assert.deepEqual((await (await fetch(base + '/api/activity')).json()).items, []);
+    require('../src/hub').logActivity(path.join(home, '.santrihub'), { client: 'claude-code', server: 'santrihub', tool: 'hub_skill', detail: 'cat-appscript' });
+    const [act] = (await (await fetch(base + '/api/activity')).json()).items;
+    assert.deepEqual([act.client, act.tool, act.detail], ['claude-code', 'hub_skill', 'cat-appscript']);
 
     // Claude Code: one catalog skill, the cms MCP and the gateway.
     for (const [url, id] of [['/api/harnesses/skill', 'cat-appscript'], ['/api/harnesses/mcp', 'cms'], ['/api/harnesses/mcp', 'santrihub-gateway']]) {
@@ -105,6 +112,19 @@ test('dashboard: save a profile from one agent, apply it to another; gateway lis
     assert.deepEqual((await post('/api/profiles/delete', { name: 'Web dev', _csrf: csrf })).body, { deleted: true });
     assert.deepEqual((await post('/api/profiles/import', { data: exported, _csrf: csrf })).body, { imported: ['Web dev'] });
     assert.equal((await post('/api/profiles/import', { data: { nope: 1 }, _csrf: csrf })).status, 400);
+
+    // Hubungkan: Cursor gets the santrihub MCP and the santrihub skill; Putuskan removes both.
+    assert.equal((await post('/api/harnesses/connect', { harness: 'cursor', enable: true })).status, 403, 'CSRF required');
+    const connected = await post('/api/harnesses/connect', { harness: 'cursor', enable: true, _csrf: csrf });
+    assert.equal(connected.status, 200);
+    const cursor = (await (await fetch(base + '/api/harnesses')).json()).harnesses.find((x) => x.id === 'cursor');
+    assert.ok(cursor.mcp.names.includes('santrihub'));
+    assert.ok(cursor.skills.some((s) => s.id === 'santrihub' && s.managed), 'hub skill installed and marked as ours');
+    assert.match(fs.readFileSync(path.join(cursor.skillsDir, 'santrihub', 'SKILL.md'), 'utf8'), /hub_cari/);
+    await post('/api/harnesses/connect', { harness: 'cursor', enable: false, _csrf: csrf });
+    const off = (await (await fetch(base + '/api/harnesses')).json()).harnesses.find((x) => x.id === 'cursor');
+    assert.ok(!off.mcp.names.includes('santrihub'));
+    assert.ok(!off.skills.some((s) => s.id === 'santrihub'));
   } finally {
     server.closeAllConnections(); remote.closeAllConnections();
     await Promise.all([new Promise((r) => server.close(r)), new Promise((r) => remote.close(r))]);

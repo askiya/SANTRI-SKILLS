@@ -7,7 +7,7 @@ const selectedSkills=new Set();
 const activity=[]; // ponytail: session-only memory log; persist server-side if audit history is needed.
 
 function status(t,err=false){if($('#locked').open)$('#gate-feedback').textContent=err?t:'';const el=$('#status');el.textContent=t;el.className='save-toast '+(err?'error':t.startsWith('✓')?'success':'')}
-function log(t,err=false){activity.unshift({t,err,at:new Date()});renderActivity()}
+function log(t,err=false){activity.unshift({t,err,at:new Date()});renderActivity();refreshBell()}
 function done(t){status(t);log(t)}function fail(e){status(e.message,true);log(e.message,true)}
 const scope=()=> 'global';
 function esc(s){const d=document.createElement('span');d.textContent=s==null?'':String(s);return d.innerHTML}
@@ -28,18 +28,33 @@ $$('.logo-box img').forEach(img=>{const mark=()=>img.closest('.logo-box').classL
 // ─ Extensions: official store links from src/extensions.js via /api/extensions ─
 let extensionsLoaded=false;
 function el(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!=null)node.textContent=text;return node}
+// Tile: logo, name, kind · version, one install button; the rest lives in the modal.
 function renderExtensions(list){const host=$('#extension-list');
   if(!list.length){host.replaceChildren(el('p','muted','Belum ada extension.'));return}
-  host.replaceChildren(...list.map(ext=>{const card=el('article','panel extension-card');card.dataset.extension=ext.id;
-    const head=el('div','ext-head');const logo=el('img','ext-logo');logo.src='/assets/santriverse-logo.webp';logo.alt='';
-    const title=el('div','ext-title');const name=el('h2',null,ext.name);const meta=el('div','ext-meta');meta.append(el('span','badge',ext.kind));if(ext.version)meta.append(el('span','muted','v'+ext.version));title.append(name,meta);head.append(logo,title);
-    const stores=el('div','ext-stores');for(const store of ext.stores||[]){const link=el('a','ext-store');link.href=store.url;link.target='_blank';link.rel='noopener noreferrer';link.dataset.external='';
-      link.append(el('strong',null,store.label),el('small',null,store.for||''));stores.append(link)}
-    card.append(head,el('p','ext-tagline',ext.tagline||''),stores);
-    if(ext.identifier){const row=el('div','ext-id');row.append(el('span','muted','ID editor'),el('code',null,ext.identifier));const copy=el('button','secondary','Salin ID');copy.type='button';
-      copy.onclick=async()=>{try{await navigator.clipboard.writeText(ext.identifier);done('✓ ID '+ext.identifier+' disalin.')}catch{fail(new Error('Clipboard tidak tersedia. Salin ID secara manual.'))}};row.append(copy);card.append(row)}
-    if(ext.steps?.length){const how=el('details','ext-steps');how.append(el('summary',null,'Cara pasang'));const ol=el('ol');for(const step of ext.steps)ol.append(el('li',null,step));how.append(ol);card.append(how)}
-    return card}))}
+  host.replaceChildren(...list.map(ext=>{const card=el('article','ext-tile');card.dataset.extension=ext.id;card.tabIndex=0;card.setAttribute('role','button');card.setAttribute('aria-label','Detail '+ext.name);
+    const main=el('span','collection-main'),meta=el('span','collection-meta');meta.append(el('span',null,ext.kind));if(ext.version)meta.append(el('span','lib-type','v'+ext.version));main.append(el('strong',null,ext.name),meta);
+    card.append(extLogo('ext-tile-logo'),main);
+    const first=(ext.stores||[])[0];if(first){const go=extStore(first,'ext-install');go.textContent='Pasang ↗';go.title=first.label+' · '+(first.for||'');go.onclick=e=>e.stopPropagation();card.append(go)}
+    card.append(el('span','collection-go','›'));
+    card.onclick=()=>openExtension(ext);card.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openExtension(ext)}};return card}))}
+const EXT_LOGO='/assets/santriverse-logo.webp';
+function extLogo(cls){const logo=el('img',cls);logo.src=EXT_LOGO;logo.alt='';return logo}
+function extStore(store,cls){const link=el('a',cls);link.href=store.url;link.target='_blank';link.rel='noopener noreferrer';link.dataset.external='';return link}
+// Modal: tagline, store buttons, editor ID, install steps as a numbered flow.
+function openExtension(ext){const dlg=$('#ext-dialog'),body=$('#ext-body');$('#ext-icon').replaceChildren(extLogo('ext-dlg-logo'));
+  $('#ext-kind').textContent=(ext.kind+(ext.version?' · v'+ext.version:'')).toUpperCase();$('#ext-title').textContent=ext.name;
+  const parts=[el('p','item-desc',ext.tagline||'')];
+  if(ext.stores?.length){const stores=el('div','ext-stores-row');for(const store of ext.stores){const link=extStore(store,'ext-store-btn');link.append(el('strong',null,store.label),el('small',null,store.for||''),el('span','ext-arrow','↗'));stores.append(link)}parts.push(el('h3','ext-sub','Pasang dari'),stores)}
+  if(ext.identifier){const row=el('div','ext-id-row');row.append(el('span',null,'ID editor'),el('code',null,ext.identifier));const copy=el('button','ck-btn','Salin');copy.type='button';
+    copy.onclick=async()=>{try{await navigator.clipboard.writeText(ext.identifier);copy.textContent='Tersalin ✓';setTimeout(()=>{copy.textContent='Salin'},1400)}catch{fail(new Error('Clipboard tidak tersedia. Salin ID secara manual.'))}};row.append(copy);parts.push(row)}
+  if(ext.steps?.length){const ol=el('ol','ext-flow');for(const step of ext.steps){const li=el('li');li.append(el('span',null,step));ol.append(li)}parts.push(el('h3','ext-sub','Cara pasang'),ol)}
+  body.replaceChildren(...parts);if(!dlg.open)dlg.showModal()}
+// Guides come from <template> blocks in the page, so their text stays in the HTML.
+function openGuide(id){const t=$('#'+id),dlg=$('#ext-dialog');if(!t)return;const ic=el('span','ext-guide-ic'+(id==='guide-rules'?' warn':''),id==='guide-rules'?'!':id==='guide-agents'?'?':'↑');
+  $('#ext-icon').replaceChildren(ic);$('#ext-kind').textContent=t.dataset.badge;$('#ext-title').textContent=t.dataset.title;$('#ext-body').replaceChildren(t.content.cloneNode(true));if(!dlg.open)dlg.showModal()}
+for(const b of document.querySelectorAll('[data-guide]'))b.onclick=()=>openGuide(b.dataset.guide);
+$('#ext-dialog').addEventListener('click',e=>{if(e.target===e.currentTarget)e.currentTarget.close()});
+$('#ext-dialog [data-close]').onclick=()=>$('#ext-dialog').close();
 async function loadExtensions(){if(extensionsLoaded)return;try{const data=await getJson('/api/extensions');extensionsLoaded=true;renderExtensions(data.extensions||[])}catch(e){$('#extension-list').replaceChildren(el('p','muted','Daftar extension belum bisa dimuat. Coba lagi.'));fail(e)}}
 if(location.hash==='#extensions')loadExtensions();
 
@@ -50,10 +65,263 @@ function agentCell(h,kind,id){
   if(kind==='mcp'){const on=h.mcp.names.includes(id===GATEWAY_ID?'santrihub':id);return {on,state:on?'on':'off',note:h.mcp.valid===false?'config rusak':''}}
   const own=h.skills.find(s=>s.id===id);if(own)return own.managed?{on:true,state:'on'}:{on:true,state:'foreign',note:'milik Anda'};
   const via=h.skillsViaOtherFolders.find(s=>s.id===id);return via?{on:false,state:'via',note:'lewat folder lain'}:{on:false,state:'off'}}
-function renderAgents(){const all=$('#agents-all').checked,shown=agents.filter(h=>all||h.detected),q=$('#agents-search').value.trim().toLowerCase();
-  $('#agents-cards').replaceChildren(...(agents.length?agents.filter(h=>all||h.detected).map(h=>{const card=el('article','panel agent-card'+(h.detected?'':' undetected'));
-    card.append(el('strong',null,h.name),el('span','pill '+(h.detected?'ok':''),h.detected?'TERDETEKSI':'BELUM ADA'),el('small','muted',`${h.skills.length} skill · ${h.mcp.names.length} MCP`));
-    const path=el('code','agent-path',h.skillsDir);path.title=h.sharedWith.length?'Folder ini juga dibaca: '+h.sharedWith.join(', '):'';card.append(path);return card}):[el('p','muted','Tidak ada data.')]));
+// ── Aktifkan · Kabel: paket and the hub on the left, AI agents on the right. A cable is a paket (or
+// the hub) active in that agent; dragging one connects, clicking one offers to disconnect.
+let wirePending=null,wireFresh=null,wirePick=null;
+const wireKey=(s,h)=>s+'>'+h,svgEl=(tag,attrs={})=>{const n=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);return n};
+function wireSources(){const items=allItems(),src=[{id:'hub',kind:'hub',title:'SantriHub Hub',meta:'MCP santrihub + skill pemandu'}];
+  for(const p of paketList()){const own=items.filter(r=>r.paket.includes(p.id));if(!own.length)continue;const sk=own.filter(r=>r.kind==='skill').length,mc=own.length-sk;
+    src.push({id:p.id,kind:'paket',title:p.short,icon:p.icon,color:p.color||'gray',meta:[sk&&sk+' skill',mc&&mc+' MCP'].filter(Boolean).join(' · '),items:own})}
+  return src}
+const usableIn=(s,h)=>s.items.filter(r=>agentCell(h,r.kind,r.id).state!=='foreign');
+function wireState(s,h){if(s.kind==='hub')return hubOn(h)?'on':'off';const usable=usableIn(s,h);if(!usable.length)return 'off';
+  const n=usable.filter(r=>agentCell(h,r.kind,r.id).on).length;return n===usable.length?'on':n?'partial':'off'}
+function renderWireBoard(){const board=$('#wire-board');if(!board)return;const shown=agents.filter(h=>$('#agents-all').checked||h.detected);
+  if(!agents.length){board.replaceChildren(el('p','muted','Mendeteksi AI agent…'));return}
+  const left=el('div','wire-col sources'),right=el('div','wire-col targets'),mid=el('div','wire-mid');
+  for(const s of wireSources()){const n=el('div','wire-node source'+(s.kind==='hub'?' hub':' paket-'+s.color)+(wirePick===s.id?' picked':'')),head=el('div','wire-node-head');n.dataset.src=s.id;
+    if(s.kind==='hub'){const img=el('img');img.src='/assets/santriverse-logo.webp';img.alt='';head.append(img)}else head.append(el('span','paket-icon',s.icon));
+    head.append(el('strong',null,s.title));const port=el('button','port out');port.type='button';port.dataset.src=s.id;port.setAttribute('aria-label','Tarik kabel dari '+s.title);
+    n.append(head,el('small',null,s.meta),port);left.append(n)}
+  for(const h of shown){const n=el('div','wire-node agent'+(h.detected?'':' missing')),head=el('div','wire-node-head');n.dataset.agent=h.id;
+    head.append(agentAvatar(h,'agent-avatar sm'),el('strong',null,h.name));n.append(el('span','port in'),head,el('small',null,h.detected?`${look(h)[2]} · ${h.skills.length} skill · ${h.mcp.names.length} MCP`:'Belum terpasang'));
+    if(!h.detected){const b=el('button','link-btn','Cara pasang →');b.type='button';b.onclick=()=>openInstall(h);n.append(b)}
+    n.onclick=e=>{if(e.target.closest('button')||!wirePick)return;const s=wireSources().find(x=>x.id===wirePick);wirePick=null;if(s)connectWire(s,h);else renderWireBoard()};right.append(n)}
+  if(!shown.length)right.append(el('p','muted wire-empty','Belum ada AI agent terdeteksi. Pasang dulu lewat Beranda → AI agent.'));
+  mid.append(el('span','wire-hint',wirePick?'Sekarang klik AI agent tujuan':'Tarik kabel dari ● ke AI agent'));
+  const legend=el('div','wire-legend');legend.append(el('span','lg on','Tersambung'),el('span','lg partial','Sebagian'),el('span','lg hint','Klik kabel untuk memutus'));
+  board.replaceChildren(svgEl('svg',{class:'wire-layer','aria-hidden':'true'}),left,mid,right,legend);requestAnimationFrame(drawWires)}
+const wireCurve=(x0,y0,x1,y1)=>{const dx=Math.max(48,Math.abs(x1-x0)*.5);return `M${x0} ${y0} C${x0+dx} ${y0} ${x1-dx} ${y1} ${x1} ${y1}`};
+const portAt=(n,box)=>{const r=n.getBoundingClientRect();return {x:r.left+r.width/2-box.left,y:r.top+r.height/2-box.top}};
+function drawWires(){const board=$('#wire-board'),svg=board?.querySelector('.wire-layer');if(!svg)return;const box=board.getBoundingClientRect();if(!box.width)return;
+  svg.setAttribute('viewBox',`0 0 ${box.width} ${box.height}`);board.querySelectorAll('.wire-badge').forEach(b=>b.remove());board.querySelectorAll('.port.live').forEach(p=>p.classList.remove('live'));
+  const groups=[];
+  for(const s of wireSources()){const out=board.querySelector(`.port.out[data-src="${s.id}"]`);if(!out)continue;const a=portAt(out,box);
+    for(const h of agents.filter(x=>x.detected)){const inn=board.querySelector(`.wire-node.agent[data-agent="${h.id}"] .port.in`);if(!inn)continue;
+      const key=wireKey(s.id,h.id),pending=wirePending===key,state=wireState(s,h);if(state==='off'&&!pending)continue;
+      const b=portAt(inn,box),d=wireCurve(a.x,a.y,b.x,b.y),g=svgEl('g'),fresh=wireFresh&&wireFresh.key===key&&Date.now()-wireFresh.at<2600;
+      const hit=svgEl('path',{d,class:'wire-hit'});hit.addEventListener('click',ev=>wireMenu(s,h,ev));
+      g.append(hit,svgEl('path',{d,class:'wire '+(pending?'pending':state)+(fresh?' fresh':'')}));if(state==='on'&&!pending)g.append(svgEl('path',{d,class:'wire-flow'}));groups.push(g);
+      if(!pending&&state!=='off'){out.classList.add('live');inn.classList.add('live')}
+      if(pending){const badge=el('span','wire-badge','Menyambungkan…');badge.style.left=(a.x+b.x)/2+'px';badge.style.top=(a.y+b.y)/2+'px';board.append(badge)}}}
+  svg.replaceChildren(...groups)}
+function startWireDrag(e){const port=e.target.closest('#wire-board .port.out');if(!port||e.button>0)return;e.preventDefault();
+  const board=$('#wire-board'),svg=board.querySelector('.wire-layer'),src=port.dataset.src,box=board.getBoundingClientRect(),a=portAt(port,box),temp=svgEl('path',{class:'wire temp'});svg.append(temp);let moved=false;
+  const over=ev=>document.elementFromPoint(ev.clientX,ev.clientY)?.closest('#wire-board .wire-node.agent');
+  const move=ev=>{moved=true;temp.setAttribute('d',wireCurve(a.x,a.y,ev.clientX-box.left,ev.clientY-box.top));const t=over(ev);board.querySelectorAll('.wire-node.agent').forEach(n=>n.classList.toggle('drop',n===t))};
+  const up=ev=>{document.removeEventListener('pointermove',move);document.removeEventListener('pointerup',up);temp.remove();board.querySelectorAll('.drop').forEach(n=>n.classList.remove('drop'));
+    const s=wireSources().find(x=>x.id===src),t=moved&&over(ev);
+    if(!t){wirePick=moved?null:(wirePick===src?null:src);renderWireBoard();return}
+    const h=agents.find(x=>x.id===t.dataset.agent);if(s&&h)connectWire(s,h)};
+  document.addEventListener('pointermove',move);document.addEventListener('pointerup',up)}
+const pause=ms=>new Promise(r=>setTimeout(r,ms));
+async function hubWire(h,enable){agentsBusy=true;show($('#progress'));status(`${enable?'Menghubungkan':'Memutus'} ${h.name} ${enable?'ke':'dari'} hub…`);
+  try{const r=await post('/api/harnesses/connect',{harness:h.id,enable});done(enable?`✓ ${h.name} tersambung ke hub SantriHub. ${r.hint||''}`:`✓ ${h.name} diputus dari hub.`)}catch(e){fail(e)}finally{agentsBusy=false;show($('#progress'),false)}await loadAgents()}
+async function connectWire(s,h){wirePick=null;if(!h.detected){status(`${h.name} belum terpasang di komputer ini.`,true);return renderWireBoard()}
+  if(wireState(s,h)==='on'){status(`${s.title} sudah tersambung ke ${h.name}.`);return renderWireBoard()}
+  if(agentsBusy)return;const key=wireKey(s.id,h.id),t0=Date.now();wirePending=key;renderWireBoard();
+  try{if(s.kind==='hub')await hubWire(h,true);else await bulkToggle(h,usableIn(s,h),true);await pause(Math.max(0,1100-(Date.now()-t0)))}
+  finally{wirePending=null;const now=agents.find(x=>x.id===h.id);wireFresh=now&&wireState(wireSources().find(x=>x.id===s.id)||s,now)!=='off'?{key,at:Date.now()}:null;renderWireBoard();
+    setTimeout(()=>{if(wireFresh&&wireFresh.key===key){wireFresh=null;drawWires()}},2700)}}
+function wireMenu(s,h,ev){ev.stopPropagation();const board=$('#wire-board');board.querySelector('.wire-menu')?.remove();const box=board.getBoundingClientRect(),m=el('div','wire-menu');
+  m.style.left=(ev.clientX-box.left)+'px';m.style.top=(ev.clientY-box.top)+'px';m.append(el('strong',null,`${s.title} → ${h.name}`));
+  const cut=el('button','secondary danger','Putuskan kabel'),no=el('button','secondary','Batal');cut.type=no.type='button';no.onclick=()=>m.remove();
+  cut.onclick=async()=>{m.remove();if(agentsBusy)return;if(s.kind==='hub')await hubWire(h,false);else await bulkToggle(h,usableIn(s,h).filter(r=>agentCell(h,r.kind,r.id).on),false)};
+  m.append(cut,no);board.append(m)}
+$('#wire-board').addEventListener('pointerdown',startWireDrag);
+document.addEventListener('click',e=>{const m=$('#wire-board .wire-menu');if(m&&!m.contains(e.target))m.remove()});
+new ResizeObserver(()=>drawWires()).observe($('#wire-board'));
+// Kabel or Tabel; the choice is kept per browser.
+function setAgentsView(v){$$('[data-agents-view]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.agentsView===v)));show($('#orbit-view'),v==='orbit');show($('#wire-board'),v==='wires');show($('#agents-table-view'),v==='table');
+  try{localStorage.setItem('santrihub-agents-view',v)}catch{}if(v==='wires')requestAnimationFrame(drawWires);if(v==='orbit'){orbitFitKey='';renderOrbit()}}
+$$('[data-agents-view]').forEach(b=>b.onclick=()=>setAgentsView(b.dataset.agentsView));
+// ── Peta: every detected AI agent together in the middle, each skill / MCP its own node on rings
+// around them. A cable is an item active in one agent; pull one from a node's + onto any agent.
+let orbitFilter='all',orbitPending=null,orbitCutting=null,orbitFresh=null,orbitFitKey='',orbitView={z:1,x:0,y:0},orbitFocus=null;
+let orbitReload={};try{orbitReload=JSON.parse(localStorage.getItem('santrihub-reload')||'{}')||{}}catch{}
+function markReload(id,on){if(on)orbitReload[id]=Date.now();else delete orbitReload[id];try{localStorage.setItem('santrihub-reload',JSON.stringify(orbitReload))}catch{}refreshBell()}
+async function reloadAgents(list,btn){const ag=list.find(h=>h.id==='antigravity');
+  if(ag){if(!confirm('Restart Google Antigravity sekarang? Simpan pekerjaan Anda di Antigravity dulu.'))return;
+    await busy(btn,'Meminta restart Antigravity…',async()=>{await post('/api/antigravity/control',{action:'restart',confirmClose:true,force:false,confirmForce:false});markReload('antigravity',false);done('✓ Antigravity direstart. Buka chat Agent baru, lalu uji di Cek & Tes.')})}
+  for(const h of list.filter(h=>h.id!=='antigravity'))markReload(h.id,false);renderOrbit()}
+const ORBIT_W=156,ORBIT_H=38,AGENT_W=164,AGENT_H=96,orbitKey=r=>r.kind+':'+r.id,cableKey=(key,h)=>key+'>'+h.id;
+const orbitAgents=()=>agents.filter(h=>h.detected||$('#agents-all').checked);
+const cellOf=(r,h)=>r.kind==='hub'?{on:hubOn(h),state:hubOn(h)?'on':'off'}:agentCell(h,r.kind,r.id);
+function orbitItems(list){const q=$('#orbit-search').value.trim().toLowerCase(),live=list.filter(h=>h.detected);
+  let rows=[{kind:'hub',id:'santrihub',label:'SantriHub Hub',desc:'MCP santrihub + skill pemandu',paket:[]},...allItems()];
+  rows=rows.map(r=>{const cells=Object.fromEntries(live.map(h=>[h.id,cellOf(r,h)]));return {...r,cells,lit:live.filter(h=>cells[h.id].on&&cells[h.id].state!=='foreign').length,via:live.some(h=>cells[h.id].state==='via')}});
+  rows=rows.filter(r=>orbitFilter==='all'||(orbitFilter==='on'?r.lit||r.via:r.kind!=='hub'&&r.paket.includes(orbitFilter)));
+  if(q)rows=rows.filter(r=>(r.label+' '+(r.desc||'')).toLowerCase().includes(q));
+  const first=r=>r.kind==='hub'?-1:paketOrder(r.paket.find(p=>p!=='mine')||r.paket[0]||'zz'),lit=r=>r.lit||r.via?0:1;
+  return rows.sort((a,b)=>lit(a)-lit(b)||first(a)-first(b)||a.label.localeCompare(b.label))}
+// Agents in a small grid in the middle; returns offsets from the centre and the grid's half size.
+function agentGrid(n){const cols=Math.max(1,Math.ceil(Math.sqrt(n))),rows=Math.max(1,Math.ceil(n/cols)),gx=AGENT_W+34,gy=AGENT_H+34,pos=[];
+  for(let i=0;i<n;i++){const row=Math.floor(i/cols),inRow=Math.min(cols,n-row*cols),col=i%cols;pos.push({x:(col-(inRow-1)/2)*gx,y:(row-(rows-1)/2)*gy})}
+  return {pos,hw:(cols*gx)/2,hh:(rows*gy)/2}}
+// Rings of an ellipse around the agent grid. Nodes sit at equal steps of 'node-sized' arc length:
+// a step counts a full node width horizontally but only a node height vertically.
+function orbitLayout(groups,hw,hh){const pos=[],gx=ORBIT_W+22,gy=ORBIT_H+18;let ring=0;
+  // Each group (connected, then the rest) starts on a fresh ring and is spread evenly around it.
+  for(const n of [].concat(groups)){let left=n;
+    while(left>0){const ry=hh+95+ring*100,rx=Math.max(ry*2.1,hw+ORBIT_W/2+130+ring*200),pts=[],S=720;let len=0,prev=null;
+      for(let i=0;i<=S;i++){const t=-Math.PI/2+i*2*Math.PI/S,p={x:Math.cos(t)*rx,y:Math.sin(t)*ry};if(prev)len+=Math.hypot((p.x-prev.x)/gx,(p.y-prev.y)/gy);pts.push({...p,len});prev=p}
+      const cap=Math.max(6,Math.floor(len)),count=Math.min(cap,left),shift=ring%2?.5:0;
+      for(let k=0;k<count;k++){const want=(k+shift)*len/count;const p=pts.find(q=>q.len>=want)||pts[0];pos.push({x:p.x,y:p.y})}left-=count;ring++}}
+  return pos}
+function tidyAssign(rows,pos,list,grid){const at=Object.fromEntries(list.map((h,i)=>[h.id,grid.pos[i]])),idx=rows.map((_,i)=>i).filter(i=>rows[i].lit||rows[i].via);
+  const slots=idx.map(i=>pos[i]),free=slots.map(()=>true),out=pos.slice(),diff=(a,b)=>Math.abs(Math.atan2(Math.sin(a-b),Math.cos(a-b)));
+  const aim=idx.map(i=>{const on=list.filter(h=>rows[i].cells[h.id]&&(rows[i].cells[h.id].on||rows[i].cells[h.id].state==='via')).map(h=>at[h.id]);if(!on.length)return null;
+    const x=on.reduce((s,p)=>s+p.x,0)/on.length,y=on.reduce((s,p)=>s+p.y,0)/on.length;return Math.hypot(x,y)<1?null:Math.atan2(y,x)});
+  // Nodes aimed at one agent choose first; nodes shared by every agent take what is left.
+  const order=idx.map((_,k)=>k).sort((a,b)=>(aim[a]===null)-(aim[b]===null));
+  for(const k of order){let best=-1,score=Infinity;for(let j=0;j<slots.length;j++){if(!free[j])continue;const sc=aim[k]===null?j:diff(aim[k],Math.atan2(slots[j].y,slots[j].x));if(sc<score){score=sc;best=j}}
+    free[best]=false;out[idx[k]]=slots[best]}
+  return out}
+// Node positions the member dragged, as offsets from the middle; kept per browser.
+let orbitPos={},orbitWobble={};try{orbitPos=JSON.parse(localStorage.getItem('santrihub-orbit-pos')||'{}')||{}}catch{}
+const saveOrbitPos=()=>{try{localStorage.setItem('santrihub-orbit-pos',JSON.stringify(orbitPos))}catch{}};
+function renderOrbit(){const canvas=$('#orbit-canvas'),board=$('#orbit-board');if(!canvas||$('#orbit-view').hidden)return;
+  const list=orbitAgents(),live=list.filter(h=>h.detected);$('#orbit-board .orbit-reload')?.remove();
+  if(!live.length&&!list.length){canvas.replaceChildren(el('p','orbit-empty','Belum ada AI agent terdeteksi di komputer ini. Pasang dulu lewat Beranda → AI agent, lalu klik Periksa ulang.'));canvas.style.cssText='inset:0;transform:none';return}
+  const chips=$('#orbit-chips'),items=allItems(),mk=(id,label)=>{const c=el('button','orbit-chip'+(orbitFilter===id?' on':''),label);c.type='button';c.onclick=()=>{orbitFilter=id;orbitFitKey='';renderOrbit()};return c};
+  chips.replaceChildren(mk('all','Semua'),mk('on','Tersambung'),...paketList().filter(p=>items.some(r=>r.paket.includes(p.id))).map(p=>mk(p.id,p.short)));
+  const before=Object.fromEntries([...canvas.querySelectorAll('.orbit-node')].map(n=>[n.dataset.key,{x:n.style.left,y:n.style.top}]));
+  const grid=agentGrid(list.length),rows=orbitItems(list),lit=rows.filter(r=>r.lit||r.via).length,pos=tidyAssign(rows,orbitLayout([lit,rows.length-lit],grid.hw,grid.hh),list,grid),pad=110;
+  const maxX=Math.max(grid.hw+60,...pos.map(p=>Math.abs(p.x)+ORBIT_W/2))+pad,maxY=Math.max(grid.hh+60,...pos.map(p=>Math.abs(p.y)+ORBIT_H/2))+pad,W=maxX*2,H=maxY*2,cx=maxX,cy=maxY;
+  canvas.style.width=W+'px';canvas.style.height=H+'px';canvas.dataset.cx=cx;canvas.dataset.cy=cy;
+  const hubs=list.map((h,i)=>{const a=el('div','orbit-center'+(h.detected?'':' missing')+(orbitReload[h.id]?' needs-reload':'')+(orbitFocus===h.id?' focus':''));a.dataset.agent=h.id;
+    a.style.left=cx+grid.pos[i].x+'px';a.style.top=cy+grid.pos[i].y+'px';
+    const n=rows.filter(r=>r.cells[h.id]&&r.cells[h.id].on&&r.cells[h.id].state!=='foreign').length;a.append(agentAvatar(h,'agent-avatar'),el('strong',null,h.name),el('small',null,h.detected?`${n} tersambung`:'Belum terpasang'));
+    if(!h.detected){const b=el('button','link-btn','Cara pasang →');b.type='button';b.onclick=()=>openInstall(h);a.append(b)}
+    a.onmouseenter=()=>{canvas.dataset.hover=h.id};a.onmouseleave=()=>{delete canvas.dataset.hover};return a});
+  // Changed on disk but not reloaded yet: one banner over the map.
+  const stale=live.filter(h=>orbitReload[h.id]);
+  if(stale.length){const box=el('div','orbit-reload'),btn=el('button','orbit-reload-btn',stale.some(h=>h.id==='antigravity')?'Restart Antigravity':'Sudah dimuat ulang');btn.type='button';btn.onclick=()=>reloadAgents(stale,btn);
+    const test=el('button','link-btn','Uji di chat →');test.type='button';test.onclick=()=>go('status');
+    box.append(el('span','orbit-reload-dot'),el('span',null,stale.map(h=>h.name).join(', ')+' perlu dimuat ulang agar sambungan baru benar-benar aktif.'),btn,test);board.append(box)}
+  const nodes=rows.map((r,i)=>{const key=orbitKey(r),saved=orbitPos[key],p=saved||pos[i],states=Object.values(r.cells);
+    const n=el('div','orbit-node'+(r.lit?' on':'')+(r.via&&!r.lit?' via':'')+(states.length&&states.every(c=>c.state==='foreign')?' foreign':'')+(r.kind==='hub'?' hub':''));
+    n.dataset.key=key;const to={x:(cx+p.x)+'px',y:(cy+p.y)+'px'},from=before[key];n.style.left=from?from.x:to.x;n.style.top=from?from.y:to.y;n._to=to;
+    if(orbitFresh&&orbitFresh.key===key&&Date.now()-orbitFresh.at<2600)n.classList.add('lit-now');
+    const inAgents=live.filter(h=>r.cells[h.id].on&&r.cells[h.id].state!=='foreign').map(h=>h.name);n.title=r.label+(inAgents.length?' · aktif di '+inAgents.join(', '):' · belum tersambung')+' · tarik untuk memindah';
+    const pk=r.paket.map(paketById).find(x=>x&&x.icon&&!x.custom&&x.id!=='mine');
+    const ic=el('span','orbit-ic'+(pk?' paket-'+pk.color:'')+(r.kind==='mcp'?' mcp':''),r.kind==='hub'?'':r.kind==='mcp'?'MCP':pk?pk.icon:r.label.replace(/[^a-z0-9]/gi,'').slice(0,2).toUpperCase());
+    if(r.kind==='hub'){const img=el('img');img.src='/assets/santriverse-logo.webp';img.alt='';ic.append(img)}
+    n.append(ic,el('strong',null,r.label));if(r.lit){const ok=el('span','orbit-check'+(r.lit>1?' many':''),r.lit>1?String(r.lit):'');ok.title=`Aktif di ${r.lit} agent`;n.append(ok)}
+    // The + pulls a cable as long as some agent still lacks this item.
+    const open=live.filter(h=>r.cells[h.id].state==='off'),port=el(open.length?'button':'span','orbit-port '+(open.length?'plus':r.lit?'live':'muted'),open.length?'+':'');
+    if(open.length){port.type='button';port.setAttribute('aria-label',`Tarik kabel dari ${r.label} ke AI agent`);port.title='Tarik kabel ke AI agent (atau klik untuk memilih)'}
+    const del=el('button','orbit-del');del.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>';del.type='button';del.title=r.kind!=='hub'&&r.mine?'Hapus dari koleksi':'Lepas dari semua AI agent';del.setAttribute('aria-label',del.title+': '+r.label);del.onclick=e=>{e.stopPropagation();deleteItem(r,n)};
+    n.onmouseenter=()=>canvas.querySelectorAll(`.orbit-cut[data-key="${key}"]`).forEach(b=>b.classList.add('show'));n.onmouseleave=()=>canvas.querySelectorAll('.orbit-cut.show').forEach(b=>b.classList.remove('show'));
+    n.append(port,del);n._row=r;return n});
+  canvas.replaceChildren(svgEl('svg',{class:'orbit-wires',width:W,height:H,viewBox:`0 0 ${W} ${H}`}),...hubs,...nodes);
+  const moving=nodes.some(n=>n.style.left!==n._to.x||n.style.top!==n._to.y);
+  if(moving)requestAnimationFrame(()=>{for(const n of nodes){n.style.left=n._to.x;n.style.top=n._to.y}setTimeout(drawOrbitWires,560)});
+  const fitKey=[list.map(h=>h.id).join(','),orbitFilter,$('#orbit-search').value,rows.length,W,H].join('|');if(fitKey!==orbitFitKey){orbitFitKey=fitKey;orbitFit()}else orbitApply();
+  drawOrbitWires()}
+function orbitApply(){$('#orbit-canvas').style.transform=`translate(${orbitView.x}px,${orbitView.y}px) scale(${orbitView.z})`}
+function orbitFit(){const board=$('#orbit-board'),c=$('#orbit-canvas'),bw=board.clientWidth,bh=board.clientHeight-30,cw=parseFloat(c.style.width)||1,ch=parseFloat(c.style.height)||1;if(!bw)return;
+  const z=Math.min(1.1,bw/cw,bh/ch);orbitView={z,x:(bw-cw*z)/2,y:(bh-ch*z)/2};orbitApply()}
+function orbitZoom(f){const board=$('#orbit-board'),bw=board.clientWidth/2,bh=board.clientHeight/2,z=Math.min(2.5,Math.max(.25,orbitView.z*f));
+  orbitView={z,x:bw-(bw-orbitView.x)*z/orbitView.z,y:bh-(bh-orbitView.y)*z/orbitView.z};orbitApply()}
+// A hanging cable: both control points drop under the straight line, more for longer cables.
+// `wob` (−1…1) makes it swing a little after a node moves.
+function orbitCable(x1,y1,x2,y2,wob=0){const len=Math.hypot(x2-x1,y2-y1),sag=Math.min(95,len*.24)*(1+wob),
+  a={x:x1+(x2-x1)*.25,y:y1+(y2-y1)*.25+sag},b={x:x1+(x2-x1)*.75,y:y1+(y2-y1)*.75+sag},
+  at=t=>{const u=1-t;return {x:u*u*u*x1+3*u*u*t*a.x+3*u*t*t*b.x+t*t*t*x2,y:u*u*u*y1+3*u*u*t*a.y+3*u*t*t*b.y+t*t*t*y2}};
+  return {d:`M${x1} ${y1} C${a.x} ${a.y} ${b.x} ${b.y} ${x2} ${y2}`,at}}
+const nodeAt=n=>({x:parseFloat(n._to?n._to.x:n.style.left),y:parseFloat(n._to?n._to.y:n.style.top)});
+// Where a cable leaves a node (its port, on the side facing the agents) and where it meets an agent card.
+function orbitPortAt(n,cx){const p=nodeAt(n),side=p.x<cx?1:-1;return {x:p.x+side*(ORBIT_W/2+5),y:p.y}}
+function agentEdge(a,px,py){const cx=parseFloat(a.style.left),cy=parseFloat(a.style.top),hw=a.offsetWidth/2+4,hh=a.offsetHeight/2+4,dx=px-cx,dy=py-cy;
+  const t=Math.min(dx?hw/Math.abs(dx):Infinity,dy?hh/Math.abs(dy):Infinity);return {x:cx+dx*t,y:cy+dy*t}}
+function drawOrbitWires(){const canvas=$('#orbit-canvas'),svg=canvas?.querySelector('.orbit-wires');if(!svg)return;
+  const cx=+canvas.dataset.cx,live=orbitAgents().filter(h=>h.detected);canvas.querySelectorAll('.orbit-cut,.wire-badge').forEach(b=>b.remove());const groups=[],now=Date.now();let swinging=false;
+  for(const n of canvas.querySelectorAll('.orbit-node')){const r=n._row,key=n.dataset.key,port=n.querySelector('.orbit-port'),side=nodeAt(n).x<cx;
+    if(port){port.classList.toggle('right',side);port.classList.toggle('left',!side)}
+    const p=orbitPortAt(n,cx),dt=now-(orbitWobble[key]||0),wob=dt<1100?.5*Math.exp(-dt/260)*Math.sin(dt/70):0;if(dt<1100)swinging=true;
+    for(const h of live){const ck=cableKey(key,h),cell=r.cells[h.id],pending=orbitPending===ck,cutting=orbitCutting===ck;
+      if(!pending&&!cutting&&!cell.on&&cell.state!=='via')continue;const a=canvas.querySelector(`.orbit-center[data-agent="${h.id}"]`);if(!a)continue;
+      const e=agentEdge(a,p.x,p.y),{d,at}=orbitCable(p.x,p.y,e.x,e.y,wob),mid=at(.35),fresh=orbitFresh&&orbitFresh.cable===ck&&now-orbitFresh.at<2600;
+      const cls=pending?'pending':cutting?'cutting':cell.state==='via'?'partial':cell.state==='foreign'?'foreign':'on';
+      const g=svgEl('g',{'data-agent':h.id});g.append(svgEl('path',{d,class:'wire cable '+cls+(fresh?' fresh':'')}));if(cls==='on')g.append(svgEl('path',{d,class:'wire-flow'}));groups.push(g);
+      if(pending||cutting){const b=el('span','wire-badge'+(cutting?' cut':''),pending?'Menyambungkan…':'Memutus…');b.style.left=mid.x+'px';b.style.top=mid.y+'px';canvas.append(b)}
+      else if(cls==='on'){const x2=el('button','orbit-cut','×');x2.type='button';x2.dataset.agent=h.id;x2.dataset.key=key;x2.style.left=mid.x+'px';x2.style.top=mid.y+'px';x2.setAttribute('aria-label',`Putuskan ${r.label} dari ${h.name}`);x2.title=`Putuskan dari ${h.name}`;x2.onclick=e=>{e.stopPropagation();orbitToggle(h,r,false)};canvas.append(x2)}}}
+  svg.replaceChildren(...groups,...svg.querySelectorAll('.temp'));if(swinging)requestAnimationFrame(drawOrbitWires)}
+// Connect / disconnect one item in one agent, then re-read the agent from disk: the map only shows what is really there.
+async function orbitToggle(h,r,enable){if(agentsBusy)return;const key=orbitKey(r),ck=cableKey(key,h),t0=Date.now();if(enable)orbitPending=ck;else orbitCutting=ck;drawOrbitWires();
+  agentsBusy=true;show($('#progress'));status(`${enable?'Menyambungkan':'Memutus'} ${r.label} ${enable?'ke':'dari'} ${h.name}…`);let err=null;
+  try{r.kind==='hub'?await post('/api/harnesses/connect',{harness:h.id,enable}):await post(r.kind==='mcp'?'/api/harnesses/mcp':'/api/harnesses/skill',{harness:h.id,id:r.id,enable})}
+  catch(e){err=e}finally{agentsBusy=false;show($('#progress'),false)}
+  await pause(Math.max(0,(enable?1000:600)-(Date.now()-t0)));orbitPending=orbitCutting=null;await loadAgents();
+  const now=agents.find(x=>x.id===h.id),cell=now?cellOf(r,now):null,where=r.kind==='skill'?[h.skillsDir,r.id,'SKILL.md'].join(h.skillsDir.includes(String.fromCharCode(92))?String.fromCharCode(92):'/'):r.kind==='hub'?'MCP santrihub + skill santrihub':h.mcp.file;
+  if(err)fail(new Error(`${r.label} gagal ${enable?'disambungkan':'diputus'}: ${err.message}`));
+  else if(!!cell?.on!==enable)fail(new Error(`Tidak terverifikasi: setelah dibaca ulang dari disk, ${r.label} ${enable?'belum ada':'masih ada'} di ${h.name}.`));
+  else{markReload(h.id,true);if(enable)orbitFresh={key,cable:ck,at:Date.now()};done(`✓ ${r.label} ${enable?'terpasang di':'dilepas dari'} ${h.name} dan terverifikasi di disk (${where}). Muat ulang ${h.name} agar ${enable?'terbaca':'hilang'}.`);renderOrbit()}
+  setTimeout(()=>{if(orbitFresh&&orbitFresh.key===key){orbitFresh=null;renderOrbit()}},2700)}
+// Clicking + (without pulling) asks which agent.
+function portMenu(n,ev){const canvas=$('#orbit-canvas'),r=n._row,open=orbitAgents().filter(h=>h.detected&&r.cells[h.id].state==='off');canvas.querySelector('.orbit-pick')?.remove();
+  if(open.length===1)return orbitToggle(open[0],r,true);
+  const m=el('div','orbit-pick'),p=orbitPortAt(n,+canvas.dataset.cx);m.style.left=p.x+'px';m.style.top=p.y+'px';m.append(el('strong',null,'Sambungkan '+r.label+' ke'));
+  for(const h of open){const b=el('button','orbit-pick-item');b.type='button';b.append(agentAvatar(h,'agent-avatar sm'),el('span',null,h.name));b.onclick=e=>{e.stopPropagation();m.remove();orbitToggle(h,r,true)};m.append(b)}
+  canvas.append(m)}
+document.addEventListener('pointerdown',e=>{const m=$('#orbit-canvas .orbit-pick');if(m&&!m.contains(e.target))m.remove()},true);
+// Pointer on the map: + pulls a cable, a node body moves the node, the background pans.
+$('#orbit-board').addEventListener('pointerdown',e=>{if(e.button>0)return;const canvas=$('#orbit-canvas'),port=e.target.closest('.orbit-port.plus');
+  if(!port&&e.target.closest('button,.orbit-zoom,.orbit-reload,.orbit-pick'))return;
+  const node=e.target.closest('.orbit-node'),sx=e.clientX,sy=e.clientY;let moved=false;
+  const off=(type,fn)=>document.removeEventListener(type,fn),on=(move,up)=>{document.addEventListener('pointermove',move);document.addEventListener('pointerup',up)};
+  const at=ev=>{const b=canvas.getBoundingClientRect();return {x:(ev.clientX-b.left)/orbitView.z,y:(ev.clientY-b.top)/orbitView.z}};
+  const agentUnder=ev=>{const a=document.elementFromPoint(ev.clientX,ev.clientY)?.closest('.orbit-center');return a&&agents.find(h=>h.id===a.dataset.agent&&h.detected)?a:null};
+  const glow=ev=>{const a=ev&&agentUnder(ev);canvas.querySelectorAll('.orbit-center').forEach(x=>x.classList.toggle('drop',x===a))};
+  if(!node){const start={...orbitView},move=ev=>{orbitView.x=start.x+ev.clientX-sx;orbitView.y=start.y+ev.clientY-sy;orbitApply()},up=()=>{off('pointermove',move);off('pointerup',up)};on(move,up);return}
+  e.preventDefault();const r=node._row,cx=+canvas.dataset.cx;
+  const connectTo=(a,ev)=>{const h=agents.find(x=>x.id===a.dataset.agent),cell=r.cells[h.id];
+    if(cell.state==='foreign')return status(`${r.label} milik Anda di ${h.name}; SantriHub tidak mengubahnya.`,true);
+    if(cell.on)return status(`${r.label} sudah tersambung ke ${h.name}.`);return orbitToggle(h,r,true)};
+  if(port){// Pull a cable out of the port; drop it on an agent to connect, anywhere else and it springs back.
+    const svg=canvas.querySelector('.orbit-wires'),from=orbitPortAt(node,cx),temp=svgEl('path',{class:'wire cable temp'});svg.append(temp);let tip=from;
+    const move=ev=>{if(!moved&&Math.hypot(ev.clientX-sx,ev.clientY-sy)<4)return;moved=true;tip=at(ev);temp.setAttribute('d',orbitCable(from.x,from.y,tip.x,tip.y).d);glow(ev)};
+    const up=ev=>{off('pointermove',move);off('pointerup',up);glow(null);const a=moved&&agentUnder(ev);
+      if(!moved){temp.remove();return portMenu(node,ev)}
+      if(a){temp.remove();return connectTo(a,ev)}
+      const t0=performance.now(),start=tip,back=t=>{const k=Math.min(1,(t-t0)/260),ease=1-Math.pow(1-k,3);temp.setAttribute('d',orbitCable(from.x,from.y,start.x+(from.x-start.x)*ease,start.y+(from.y-start.y)*ease).d);if(k<1)requestAnimationFrame(back);else temp.remove()};requestAnimationFrame(back)};
+    on(move,up);return}
+  // Move the node; its cables follow. Dropping it on an agent connects it there.
+  const start=nodeAt(node);let frame=0;
+  const trash=$('#orbit-trash'),overTrash=ev=>{const t=trash.getBoundingClientRect();return ev.clientX>=t.left&&ev.clientX<=t.right&&ev.clientY>=t.top&&ev.clientY<=t.bottom};
+  const move=ev=>{if(!moved&&Math.hypot(ev.clientX-sx,ev.clientY-sy)<4)return;if(!moved){moved=true;node.classList.add('dragging');node._to=null;show(trash)}trash.classList.toggle('hot',overTrash(ev));
+    node.style.left=start.x+(ev.clientX-sx)/orbitView.z+'px';node.style.top=start.y+(ev.clientY-sy)/orbitView.z+'px';glow(ev);if(!frame)frame=requestAnimationFrame(()=>{frame=0;drawOrbitWires()})};
+  const up=ev=>{off('pointermove',move);off('pointerup',up);node.classList.remove('dragging');glow(null);const binned=moved&&overTrash(ev);show(trash,false);trash.classList.remove('hot');
+    if(!moved){if(r.kind!=='hub')openItem(r);return}
+    if(binned){node.style.left=start.x+'px';node.style.top=start.y+'px';node._to={x:start.x+'px',y:start.y+'px'};drawOrbitWires();return deleteItem(r,node)}
+    const key=node.dataset.key,p=nodeAt(node),a=agentUnder(ev);node._to={x:p.x+'px',y:p.y+'px'};
+    if(a&&r.cells[a.dataset.agent]?.state==='off'){delete orbitPos[key];saveOrbitPos();return connectTo(a,ev)}
+    orbitPos[key]={x:p.x-cx,y:p.y-(+canvas.dataset.cy)};saveOrbitPos();orbitWobble[key]=Date.now();drawOrbitWires()};
+  on(move,up)});
+$('#orbit-board').addEventListener('wheel',e=>{if(!e.ctrlKey)return;e.preventDefault();orbitZoom(e.deltaY<0?1.12:1/1.12)},{passive:false});
+$$('[data-zoom]').forEach(b=>b.onclick=()=>{const z=b.dataset.zoom;if(z==='reset'){orbitPos={};saveOrbitPos();renderOrbit();done('Posisi node dirapikan kembali.')}else if(z==='fit')orbitFit();else orbitZoom(z==='in'?1.2:1/1.2)});
+$('#orbit-search').addEventListener('input',()=>renderOrbit());
+$('#orbit-tidy').onclick=()=>{orbitPos={};saveOrbitPos();orbitFitKey='';renderOrbit();done('✨ Peta dirapikan: yang tersambung menghadap agent-nya, sisanya di lingkar luar.')};
+// Own skills / MCP leave the collection (and every agent); catalog items can only leave the agents.
+async function deleteItem(r,node){if(agentsBusy)return;const live=orbitAgents().filter(h=>h.detected),on=live.filter(h=>r.cells[h.id]?.on&&r.cells[h.id].state!=='foreign'),names=on.map(h=>h.name).join(', ');
+  const own=r.kind!=='hub'&&r.mine;
+  if(!own&&!on.length)return status(`${r.label} adalah ${r.kind==='hub'?'Hub SantriHub':'skill bawaan paket'}; tidak bisa dihapus dari koleksi dan belum tersambung ke agent mana pun.`,true);
+  const ask=own?`Hapus ${r.kind==='mcp'?'MCP':'skill'} "${r.label}" dari koleksi Anda?${on.length?` Salinannya di ${names} ikut dilepas.`:''} Tindakan ini tidak bisa dibatalkan.`
+    :`"${r.label}" adalah ${r.kind==='hub'?'Hub SantriHub':'skill bawaan paket'} dan tidak bisa dihapus dari koleksi. Lepas dari semua AI agent (${names})?`;
+  if(!confirm(ask))return;node?.classList.add('removing');agentsBusy=true;show($('#progress'));status(own?`Menghapus ${r.label}…`:`Melepas ${r.label} dari ${names}…`);
+  try{if(own){const x=await post(r.kind==='mcp'?'/api/mcp-library/delete':'/api/library/delete',{id:r.id});delete orbitPos[orbitKey(r)];saveOrbitPos();
+      for(const h of on)markReload(h.id,true);done(`🗑 ${r.label} dihapus dari koleksi${x.deactivated?.length?` dan dilepas dari ${x.deactivated.join(', ')}`:''}.`)}
+    else{const failed=[];for(const h of on){try{r.kind==='hub'?await post('/api/harnesses/connect',{harness:h.id,enable:false}):await post(r.kind==='mcp'?'/api/harnesses/mcp':'/api/harnesses/skill',{harness:h.id,id:r.id,enable:false});markReload(h.id,true)}catch(e){failed.push(h.name+': '+e.message)}}
+      if(failed.length)fail(new Error('Sebagian gagal dilepas: '+failed.join(' · ')));else done(`✓ ${r.label} dilepas dari ${names}.`)}}
+  catch(e){node?.classList.remove('removing');fail(e)}finally{agentsBusy=false;show($('#progress'),false)}
+  await loadAgents()}
+new ResizeObserver(()=>{if(!$('#orbit-view').hidden&&orbitFitKey)orbitFit()}).observe($('#orbit-board'));
+try{const v=localStorage.getItem('santrihub-agents-view');if(v==='table'||v==='wires')setAgentsView(v)}catch{}
+function renderAgents(){renderWireBoard();renderOrbit();const all=$('#agents-all').checked,shown=agents.filter(h=>all||h.detected),q=$('#agents-search').value.trim().toLowerCase();
+  $('#agents-cards').replaceChildren(...(agents.length?agents.filter(h=>all||h.detected).map(h=>{const card=el('article','panel agent-card'+(h.detected?'':' undetected')),main=el('span','agent-card-main'),meta=el('small','agent-card-meta');
+    meta.append(el('i','status-dot'+(h.detected?' on':'')),h.detected?`${h.skills.length} skill · ${h.mcp.names.length} MCP`:'Belum terdeteksi');main.append(el('strong',null,h.name),meta);
+    card.title=h.skillsDir+(h.sharedWith.length?'\nFolder ini juga dibaca: '+h.sharedWith.join(', '):'');card.append(agentAvatar(h,'agent-avatar agent-card-av'),main);return card}):[el('p','muted','Tidak ada data.')]));
   if(!shown.length){$('#agents-matrix').replaceChildren(el('caption',null,'Belum ada AI agent terdeteksi. Centang "Tampilkan agent yang belum terdeteksi" untuk menyiapkan lebih dulu.'));return}
   const rows=allItems({gateway:true}).filter(r=>!q||(r.label+' '+(r.desc||'')+' '+paketById(r.paket[0]).short).toLowerCase().includes(q));
   const head=el('tr');head.append(el('th',null,'Skill / MCP'),...shown.map(h=>{const th=el('th',null,h.name);th.scope='col';return th}));
@@ -69,7 +337,7 @@ function renderAgents(){const all=$('#agents-all').checked,shown=agents.filter(h
       box.disabled=agentsBusy||!usable.length;box.setAttribute('aria-label',`Semua ${p.short} di ${h.name}`);box.onchange=()=>bulkToggle(h,usable,box.checked);td.append(box,el('small',null,`${onN}/${usable.length}`));tr.append(td)}
     body.push(tr,...group.map(rowFor))}
   $('#agents-matrix').replaceChildren(el('thead'),el('tbody'));$('#agents-matrix thead').append(head);$('#agents-matrix tbody').append(...body)}
-async function loadAgents(){try{const [h,lib,gw,pr,mine,own]=await Promise.all([getJson('/api/harnesses'),getJson('/api/library'),getJson('/api/gateway'),getJson('/api/profiles'),getJson('/api/mcp-library'),getJson('/api/my-paket')]);agents=h.harnesses||[];myMcp=mine.servers||[];myPaket=own.paket||[];librarySkills=lib.skills||[];gatewayServers=gw.servers||[];profiles=pr.profiles||{};renderAgents();renderGateway();renderProfiles();renderFlow()}catch(e){$('#agents-cards').replaceChildren(el('p','muted','AI agent belum bisa dideteksi.'));fail(e)}}
+async function loadAgents(){try{const [h,lib,gw,pr,mine,own]=await Promise.all([getJson('/api/harnesses'),getJson('/api/library'),getJson('/api/gateway'),getJson('/api/profiles'),getJson('/api/mcp-library'),getJson('/api/my-paket')]);agents=h.harnesses||[];myMcp=mine.servers||[];myPaket=own.paket||[];librarySkills=lib.skills||[];gatewayServers=gw.servers||[];profiles=pr.profiles||{};renderAgents();renderGateway();renderProfiles();renderFlow();renderHomeUploads();loadActivity()}catch(e){$('#agents-cards').replaceChildren(el('p','muted','AI agent belum bisa dideteksi.'));fail(e)}}
 async function toggleAgent(h,r,box){const enable=box.checked;agentsBusy=true;$$('#agents-matrix input').forEach(i=>{i.disabled=true});show($('#progress'));status(`${enable?'Mengaktifkan':'Menonaktifkan'} ${r.label} di ${h.name}…`);
   try{const res=await post(r.kind==='mcp'?'/api/harnesses/mcp':'/api/harnesses/skill',{harness:h.id,id:r.id,enable});done(`✓ ${r.label} ${enable?'aktif':'nonaktif'} di ${h.name}. ${res.hint||''}`)}
   catch(e){fail(e)}finally{agentsBusy=false;show($('#progress'),false);await loadAgents()}}
@@ -97,19 +365,18 @@ $('#profile-export').onclick=()=>{const blob=new Blob([JSON.stringify({version:1
 $('#profile-import').onchange=async()=>{const f=$('#profile-import').files[0];if(!f)return;try{const data=JSON.parse(await readFile(f));const r=await post('/api/profiles/import',{data});done(`✓ Diimpor: ${r.imported.join(', ')}.`);await loadAgents()}catch(e){fail(e instanceof SyntaxError?new Error('File bukan JSON valid.'):e)}finally{$('#profile-import').value=''}};
 
 // ─ Skill Saya: the member's library via /api/library (src/library.js) ─
-let librarySkills=[],libPreview=null;
+let librarySkills=[],libPreview=null,libraryLoaded=false;
 const readFile=file=>new Promise((ok,no)=>{if(file.size>512*1024)return no(new Error(`${file.name} melebihi 512 KB.`));const r=new FileReader();r.onload=()=>ok(String(r.result));r.onerror=()=>no(new Error(`${file.name} tidak bisa dibaca.`));r.readAsText(file)});
 function emptyState(text,label,action){const box=el('div','empty-state');box.append(el('p',null,text));if(label){const b=el('button','secondary',label);b.type='button';b.onclick=action;box.append(b)}return box}
-function renderLibrary(){const host=$('#library-list');
+const LIB_TYPE={github:'GitHub',upload:'Upload'};
+function libRow(s){return allItems().find(r=>r.kind==='skill'&&r.mine&&r.id===s.id)||{kind:'skill',id:s.id,label:s.id,desc:s.description,mine:true,paket:['mine'],by:libraryOrigin(s)}}
+function renderLibrary(){const host=$('#library-list');if(!libraryLoaded)return;
   if(!librarySkills.length){host.replaceChildren(emptyState('Belum ada skill milik Anda. Import dari GitHub atau buat dari Markdown.','+ Import dari GitHub',()=>$('#lib-open-github').click()));return}
-  host.replaceChildren(...librarySkills.map(s=>{const card=el('article','panel lib-card');const head=el('div','lib-card-head');head.append(el('strong',null,s.id),el('span','pill',({github:'GITHUB',upload:'UPLOAD'})[s.type]||'MARKDOWN'));if(s.generated)head.append(el('span','pill','SKILL.md DIBUAT OTOMATIS'));
-    const about=el('p',null,s.description||'(tanpa deskripsi)');about.title=s.description||'';card.append(head,about);
-    if(s.repo){const link=el('a','lib-source','github.com/'+s.repo);link.href='https://github.com/'+s.repo;link.target='_blank';link.rel='noopener noreferrer';card.append(link)}
-    const actions=el('div','lib-actions');const use=el('button','secondary','Aktifkan di AI Agents');use.type='button';use.onclick=()=>{$('#agents-search').value=s.id;go('agents')};actions.append(use);
-    if(s.type==='github'){const upd=el('button','secondary','Cek update');upd.type='button';upd.onclick=()=>busy(upd,`Mengecek ${s.id} di GitHub…`,async()=>{const r=await post('/api/library/update',{id:s.id});done(r.changed?`✓ ${s.id} diperbarui${r.synced?.length?` (juga di ${r.synced.join(', ')})`:''}.`:`✓ ${s.id} sudah versi terbaru.`);await loadLibrary()});actions.append(upd)}
-    const del=el('button','secondary danger','Hapus');del.type='button';del.onclick=()=>{if(!confirm(`Hapus ${s.id} dari library? Salinannya di AI agent juga dinonaktifkan.`))return;busy(del,`Menghapus ${s.id}…`,async()=>{const r=await post('/api/library/delete',{id:s.id});done(`✓ ${s.id} dihapus${r.deactivated?.length?` dan dinonaktifkan di ${r.deactivated.join(', ')}`:''}.`);await loadLibrary()})};actions.append(del);
-    card.append(actions);return card}))}
-async function loadLibrary(){try{librarySkills=(await getJson('/api/library')).skills||[];renderLibrary();renderFlow()}catch(e){$('#library-list').replaceChildren(el('p','muted','Library belum bisa dimuat.'));fail(e)}}
+  host.replaceChildren(...librarySkills.map(s=>{const r=libRow(s),on=activeIn('skill',s.id),card=el('button','collection-card compact lib-tile'+(on.length?' on':''));card.type='button';card.title=s.id;card.setAttribute('aria-label','Detail '+s.id);
+    const main=el('span','collection-main'),meta=el('span','collection-meta');
+    meta.append(el('i','status-dot'+(on.length?' on':'')),el('span',null,on.length?'Aktif di '+on.length+' agent':'Belum aktif'),el('span','lib-type',LIB_TYPE[s.type]||'Markdown'));
+    main.append(el('strong',null,s.id),meta);card.append(itemIcon(r),main,el('span','collection-go','›'));card.onclick=()=>openItem(r);return card}))}
+async function loadLibrary(){try{librarySkills=(await getJson('/api/library')).skills||[];libraryLoaded=true;renderLibrary();renderFlow()}catch(e){$('#library-list').replaceChildren(el('p','muted','Library belum bisa dimuat.'));fail(e)}}
 function closeLibPanels(){show($('#lib-github'),false);show($('#lib-md'),false);libPreview=null;$('#lib-github-results').replaceChildren();show($('#lib-github-actions'),false)}
 $('#lib-open-github').onclick=()=>{closeLibPanels();show($('#lib-github'));$('#lib-github-url').focus()};
 $('#lib-open-md').onclick=()=>{closeLibPanels();show($('#lib-md'));$('#lib-md-content').focus()};
@@ -149,19 +416,34 @@ function renderCollection(){const host=$('#collection-list');if(!host)return;con
   const rows=shown[collectionKind];
   if(!rows.length){const empty=el('div','collection-empty');empty.append(el('p','muted',q?'Tidak ada yang cocok dengan pencarian.':collectionPaket==='mine'?'Belum ada skill atau MCP milik Anda. Tambahkan lewat impor pintar.':'Koleksi masih kosong.'));
     const add=el('button','home-create','+ Tambah skill / MCP');add.type='button';add.onclick=()=>go('add');empty.append(add);host.replaceChildren(empty);return}
-  host.replaceChildren(...rows.map(r=>{const card=el('article','collection-card'+(r.mine?' mine':''));const head=el('div','collection-card-head');
-    head.append(el('strong',null,r.label),...r.paket.map(paketPill));if(r.starter)head.append(el('span','pill starter','SKILL PEMBUKA'));card.append(head,el('small','collection-by',r.by));
-    const about=el('p',null,r.desc||'(tanpa deskripsi)');about.title=r.desc||'';card.append(about);
-    const on=activeIn(r.kind,r.id),where=el('small','collection-active'+(on.length?' on':''));
-    where.textContent=on.length?'Aktif di '+on.join(', '):agents.length?'Belum aktif di AI agent mana pun':'Status AI agent belum dimuat';
-    if(r.gateway)where.textContent+=' · lewat Gateway';card.append(where);
-    const actions=el('div','collection-actions'),use=el('button','home-create',on.length?'Atur agent →':'Aktifkan →');use.type='button';
-    use.onclick=()=>{$('#agents-search').value=r.id;go('agents');renderAgents()};actions.append(use);
-    if(r.kind==='mcp'){const t=el('button','secondary','Tes koneksi');t.type='button';t.onclick=()=>testMcp(r.id,card,t);actions.append(t)}
-    if(r.mine){const pk=el('button','secondary','Paket…');pk.type='button';pk.onclick=()=>paketChooser(r,card);actions.append(pk)}
-    if(r.mine&&r.kind==='skill'){const manage=el('button','secondary','Kelola');manage.type='button';manage.onclick=()=>go('library');actions.append(manage)}
-    if(r.mine&&r.kind==='mcp'){const del=el('button','secondary danger','Hapus');del.type='button';del.onclick=()=>{if(!confirm(`Hapus MCP ${r.label} dari koleksi? Salinannya di AI agent juga dinonaktifkan.`))return;busy(del,`Menghapus ${r.label}…`,async()=>{const x=await post('/api/mcp-library/delete',{id:r.id});done(`✓ ${r.label} dihapus${x.deactivated.length?` dan dinonaktifkan di ${x.deactivated.join(', ')}`:''}.`);await loadAgents()})};actions.append(del)}
-    card.append(actions);return card}))}
+  host.replaceChildren(...rows.map(r=>{const on=activeIn(r.kind,r.id),card=el('button','collection-card compact'+(r.mine?' mine':'')+(on.length?' on':''));card.type='button';card.setAttribute('aria-label','Detail '+r.label);card.title=r.label;
+    const main=el('span','collection-main'),meta=el('span','collection-meta');
+    meta.append(el('i','status-dot'+(on.length?' on':'')),el('span',null,on.length?'Aktif di '+on.length+' agent':'Belum aktif'));
+    for(const id of r.paket.filter(x=>x!=='mine'))meta.append(el('span','dot-pill paket-'+paketById(id).color,paketById(id).short));
+    main.append(el('strong',null,r.label),meta);card.append(itemIcon(r),main,el('span','collection-go','›'));card.onclick=()=>openItem(r);return card}))}
+// Catalog items carry their paket icon and colour; own items show the initials of their name.
+function itemIcon(r){const p=r.paket.map(paketById).find(x=>x&&x.icon&&!x.custom&&x.id!=='mine'),words=r.label.split(/[^a-z0-9]+/i).filter(Boolean);
+  const i=el('span','item-icon '+(r.kind==='mcp'?'mcp':'skill')+(p?' paket-'+p.color:''),r.kind==='mcp'?'MCP':p?p.icon:(words.length>1?words[0][0]+words[1][0]:r.label.slice(0,2)).toUpperCase());i.setAttribute('aria-hidden','true');return i}
+// Detail of one skill / MCP: description, origin, where it is active and every action.
+function openItem(r){const dlg=$('#item-dialog'),body=$('#item-body');$('#item-icon').replaceWith(Object.assign(itemIcon(r),{id:'item-icon'}));
+  $('#item-kind').textContent=r.kind==='mcp'?'MCP SERVER':'SKILL';$('#item-title').textContent=r.label;
+  const pills=el('div','item-pills');pills.append(...r.paket.map(paketPill));if(r.starter)pills.append(el('span','pill starter','SKILL PEMBUKA'));
+  const on=activeIn(r.kind,r.id),facts=el('dl','paket-facts');const fact=(k,v)=>{if(v)facts.append(el('dt',null,k),el('dd',null,v))};
+  const lib=r.mine&&r.kind==='skill'?librarySkills.find(s=>s.id===r.id):null;
+  fact('Asal',r.by);if(lib?.generated)fact('Catatan','SKILL.md dibuat otomatis');
+  if(lib?.repo){const a=el('a','lib-source','github.com/'+lib.repo);a.href='https://github.com/'+lib.repo;a.target='_blank';a.rel='noopener noreferrer';const dd=el('dd');dd.append(a);facts.append(el('dt',null,'Repo'),dd)}
+  fact('Aktif di',on.length?on.join(', '):agents.length?'Belum aktif di AI agent mana pun':'Status AI agent belum dimuat');if(r.gateway)fact('Lewat','SantriHub Gateway');
+  const about=el('p','item-desc',r.desc||'(tanpa deskripsi)');
+  const actions=el('div','collection-actions'),use=el('button','home-create',on.length?'Atur agent →':'Aktifkan →');use.type='button';
+  use.onclick=()=>{dlg.close();$('#agents-search').value=r.id;go('agents');renderAgents()};actions.append(use);
+  if(r.kind==='mcp'){const t=el('button','secondary','Tes koneksi');t.type='button';t.onclick=()=>testMcp(r.id,body,t);actions.append(t)}
+  if(r.mine){const pk=el('button','secondary','Paket…');pk.type='button';pk.onclick=()=>paketChooser(r,body);actions.append(pk)}
+  if(lib&&lib.type==='github'){const upd=el('button','secondary','Cek update');upd.type='button';upd.onclick=()=>busy(upd,`Mengecek ${lib.id} di GitHub…`,async()=>{const x=await post('/api/library/update',{id:lib.id});done(x.changed?`✓ ${lib.id} diperbarui${x.synced?.length?` (juga di ${x.synced.join(', ')})`:''}.`:`✓ ${lib.id} sudah versi terbaru.`);await loadLibrary()});actions.append(upd)}
+  if(lib){const del=el('button','secondary danger','Hapus');del.type='button';del.onclick=()=>{if(!confirm(`Hapus ${lib.id} dari library? Salinannya di AI agent juga dinonaktifkan.`))return;busy(del,`Menghapus ${lib.id}…`,async()=>{const x=await post('/api/library/delete',{id:lib.id});dlg.close();done(`✓ ${lib.id} dihapus${x.deactivated?.length?` dan dinonaktifkan di ${x.deactivated.join(', ')}`:''}.`);await loadLibrary();await loadAgents()})};actions.append(del)}
+  if(r.mine&&r.kind==='mcp'){const del=el('button','secondary danger','Hapus');del.type='button';del.onclick=()=>{if(!confirm(`Hapus MCP ${r.label} dari koleksi? Salinannya di AI agent juga dinonaktifkan.`))return;busy(del,`Menghapus ${r.label}…`,async()=>{const x=await post('/api/mcp-library/delete',{id:r.id});dlg.close();done(`✓ ${r.label} dihapus${x.deactivated.length?` dan dinonaktifkan di ${x.deactivated.join(', ')}`:''}.`);await loadAgents()})};actions.append(del)}
+  body.replaceChildren(pills,about,facts,actions);if(!dlg.open)dlg.showModal()}
+$('#item-dialog').addEventListener('click',e=>{if(e.target===e.currentTarget)e.currentTarget.close()});
+$('#item-dialog [data-close]').onclick=()=>$('#item-dialog').close();
 function renderHomeSteps(){const host=$('#home-steps');if(!host)return;const found=detectedAgents();
   const items=catalog.skills.length+librarySkills.length+catalog.mcpServers.length;
   const active=found.reduce((n,h)=>n+h.skills.filter(s=>s.managed).length+h.mcp.names.length,0);
@@ -173,14 +455,88 @@ function renderHomeSteps(){const host=$('#home-steps');if(!host)return;const fou
   host.replaceChildren(...steps.map((s,i)=>{const li=el('li','home-step'+(s.done?' done':'')+(i===next?' next':'')),b=el('button','home-step-btn');b.type='button';b.onclick=()=>go(s.page);
     b.append(el('span','home-step-num',s.done?'✓':String(i+1)),el('span','home-step-title',s.title),el('span','home-step-state',s.detail));if(i===next)b.append(el('span','home-step-badge','Mulai di sini'));
     li.append(b);return li}))}
-function renderHomeAgents(){const host=$('#home-agents');if(!host)return;const found=detectedAgents();
-  if(!agents.length){host.replaceChildren(el('span','muted','AI agent belum bisa dideteksi.'));return}
-  const chips=found.map(h=>{const b=el('button','agent-chip');b.type='button';b.onclick=()=>go('agents');
-    b.append(el('i','agent-dot'),el('strong',null,h.name),el('small',null,`${h.skills.length} skill · ${h.mcp.names.length} MCP`));return b});
-  if(!found.length)chips.push(el('span','muted','Belum ada AI agent terdeteksi. Pasang Claude Code, Codex, Gemini CLI, Cursor, atau Antigravity dulu.'));
-  const rest=agents.length-found.length;if(rest){const more=el('button','agent-chip ghost',`+${rest} agent bisa disiapkan`);more.type='button';more.onclick=()=>{$('#agents-all').checked=true;go('agents');renderAgents()};chips.push(more)}
-  host.replaceChildren(...chips)}
-function renderFlow(){renderHomeSteps();renderHomePaths();renderHomeAgents();renderCollection();renderAgentChecks();$('#stat-library').textContent=librarySkills.length?`+ ${librarySkills.length} skill milik Anda`:'+ skill milik Anda'}
+const HUB_ACTION={hub_cari:'mencari skill',hub_skill:'memuat skill',get_skill:'memuat skill',hub_docs:'membaca pedoman',hub_alat:'mencari alat MCP',hub_pakai:'memakai alat MCP',hub_status:'cek status hub'};
+function activityTime(at){const d=new Date(at);if(isNaN(d))return '';const t=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});return d.toDateString()===new Date().toDateString()?t:d.toLocaleDateString([],{day:'numeric',month:'short'})+' '+t}
+function renderHomeActivity(items){const host=$('#home-activity');if(!host)return;
+  if(!items.length){host.replaceChildren(el('p','muted','Belum ada aktivitas. Muncul saat AI agent memakai skill lewat hub.'));return}
+  const list=el('ol','activity-list');
+  for(const a of items.slice(0,8)){const li=el('li','activity-row');li.append(el('strong',null,a.client),el('span',null,HUB_ACTION[a.tool]||a.tool),el('code',null,a.detail||'—'),el('time',null,activityTime(a.at)));if(a.detail)li.title=a.detail;list.append(li)}
+  host.replaceChildren(list)}
+async function loadActivity(){try{renderHomeActivity((await getJson('/api/activity')).items||[])}catch{/* not signed in yet: the list stays as it was */}}
+setInterval(()=>{if(csrf&&!document.hidden&&$('#page-home')&&!$('#page-home').hidden)loadActivity()},15000);
+// Fase 3 · Hubungkan: an agent is on the hub when it has the santrihub MCP and the santrihub skill.
+const hubOn=h=>h.mcp.names.includes('santrihub')&&(!h.skillsDir||h.skills.some(x=>x.id==='santrihub'));
+function connectAgent(h,enable,btn){return busy(btn,`${enable?'Menghubungkan':'Memutus'} ${h.name}…`,async()=>{const r=await post('/api/harnesses/connect',{harness:h.id,enable});
+  done(enable?`✓ ${h.name} terhubung ke hub SantriHub. ${r.hint||''}`:`✓ ${h.name} diputus dari hub SantriHub.`);await loadAgents()})}
+async function connectAll(list,btn){btn.disabled=true;show($('#progress'));const ok=[],bad=[];
+  for(const h of list){status(`Menghubungkan ${h.name}…`);try{await post('/api/harnesses/connect',{harness:h.id,enable:true});ok.push(h.name)}catch(e){bad.push(`${h.name}: ${e.message}`)}}
+  show($('#progress'),false);btn.disabled=false;if(ok.length)done(`✓ Terhubung ke hub: ${ok.join(', ')}. Muat ulang tiap agent agar hub terbaca.`);if(bad.length)fail(new Error(bad.join(' · ')));await loadAgents()}
+const AGENT_LOOK={antigravity:['AG','#3b7cf5','IDE'],'claude-code':['CC','#d9774f','CLI'],codex:['CX','#2b2b33','CLI'],'gemini-cli':['GM','#6d5df5','CLI'],cursor:['CU','#4b4b57','IDE'],vscode:['VS','#1f8ad2','IDE'],windsurf:['WS','#14a39a','IDE']};
+const look=h=>AGENT_LOOK[h.id]||[h.name.slice(0,2).toUpperCase(),'#6c6c7c','IDE'];
+function agentAvatar(h,cls='agent-avatar'){const [ini,color]=look(h),a=el('span',cls,ini);a.style.setProperty('--ag',color);a.setAttribute('aria-hidden','true');return a}
+// How to install each agent: official commands and download pages only.
+const NODE_NOTE='Butuh Node.js 18 atau lebih baru (nodejs.org).';
+const AGENT_INSTALL={
+  'claude-code':{steps:[['Windows (PowerShell)','irm https://claude.ai/install.ps1 | iex'],['macOS / Linux','curl -fsSL https://claude.ai/install.sh | bash'],['Atau lewat npm','npm install -g @anthropic-ai/claude-code']],run:'claude',url:'https://docs.claude.com/en/docs/claude-code/setup'},
+  codex:{steps:[['Lewat npm','npm install -g @openai/codex']],note:NODE_NOTE,run:'codex',url:'https://github.com/openai/codex'},
+  'gemini-cli':{steps:[['Lewat npm','npm install -g @google/gemini-cli']],note:NODE_NOTE,run:'gemini',url:'https://github.com/google-gemini/gemini-cli'},
+  antigravity:{app:'https://antigravity.google/download'},cursor:{app:'https://cursor.com/download'},
+  vscode:{app:'https://code.visualstudio.com/download',note:'Setelah terpasang, aktifkan GitHub Copilot di VS Code.'},windsurf:{app:'https://windsurf.com/download'}};
+function openInstall(h){const g=AGENT_INSTALL[h.id]||{},body=$('#agent-install-body'),parts=[];
+  $('#agent-install-avatar').replaceWith(Object.assign(agentAvatar(h),{id:'agent-install-avatar'}));$('#agent-install-title').textContent=h.name;
+  if(g.app){parts.push(el('p',null,h.name+' adalah aplikasi desktop. Unduh dari situs resminya, pasang, lalu buka sekali.'));const a=el('a','home-create install-link','Buka halaman unduhan ↗');a.href=g.app;a.target='_blank';a.rel='noopener noreferrer';parts.push(a)}
+  else{parts.push(el('p',null,h.name+' adalah CLI. Jalankan salah satu perintah ini di terminal:'));const ol=el('ol','install-steps');
+    for(const [label,cmd] of g.steps||[]){const li=el('li'),box=el('div','copy-example'),code=el('code',null,cmd),copy=el('button','copy-btn','Salin');copy.type='button';copy.onclick=()=>copyText(cmd,copy);box.append(code,copy);li.append(el('strong',null,label),box);ol.append(li)}
+    parts.push(ol);if(g.run)parts.push(el('p','muted',`Lalu buka folder proyek di terminal dan jalankan ${g.run} untuk login pertama kali.`));
+    if(g.url){const a=el('a','link-btn','Panduan resmi ↗');a.href=g.url;a.target='_blank';a.rel='noopener noreferrer';parts.push(a)}}
+  if(g.note)parts.push(el('p','muted',g.note));
+  const re=el('button','wizard-primary','Sudah terpasang · Periksa ulang');re.type='button';re.onclick=()=>busy(re,'Memeriksa AI agent…',async()=>{await loadAgents();const now=agents.find(x=>x.id===h.id);if(now?.detected){$('#agent-install').close();done(`✓ ${h.name} terdeteksi. Klik Hubungkan agar terhubung ke hub.`)}else status(`${h.name} belum terdeteksi. Selesaikan pemasangan, buka sekali, lalu periksa ulang.`,true)});
+  parts.push(el('div','install-foot'),re);body.replaceChildren(...parts);$('#agent-install').showModal()}
+function renderHomeAgents(){const host=$('#home-agents'),all=$('#connect-all');if(!host)return;
+  if(!agents.length){host.replaceChildren(el('p','muted','AI agent belum bisa dideteksi.'));show(all,false);return}
+  const found=detectedAgents(),missing=agents.filter(h=>!found.includes(h)),linked=found.filter(hubOn).length;
+  const map=el('div','agent-map-inner'),svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('class','agent-links');svg.setAttribute('aria-hidden','true');
+  const hub=el('div','hub-node'),logo=el('img');logo.src='/assets/santriverse-logo.webp';logo.alt='';hub.append(logo,el('strong',null,'SantriHub'),el('small',null,found.length?`${linked}/${found.length} agent terhubung`:'Belum ada agent'));
+  const row=el('div','agent-row');
+  for(const h of found){const on=hubOn(h),node=el('div','agent-node'+(on?' on':'')),open=el('button','agent-node-main');open.type='button';open.onclick=()=>go('agents');
+    const meta=el('span','agent-node-meta');meta.append(el('span','agent-kind',look(h)[2]),el('span',null,`${h.skills.length} skill · ${h.mcp.names.length} MCP`));
+    open.append(agentAvatar(h),el('strong',null,h.name),meta);node.append(open);
+    if(on){const tag=el('span','agent-hub','✓ Terhubung'),cut=el('button','agent-cut','Putuskan');cut.type='button';cut.onclick=()=>connectAgent(h,false,cut);node.append(tag,cut)}
+    else{const act=el('button','agent-connect','Hubungkan');act.type='button';act.title='Pasang MCP santrihub dan skill pemandunya di '+h.name;act.onclick=()=>connectAgent(h,true,act);node.append(act)}
+    row.append(node)}
+  if(!found.length)row.append(el('p','agent-empty','Belum ada AI agent terdeteksi di komputer ini. Pasang salah satu di bawah, lalu klik Periksa ulang.'));
+  map.append(svg,hub,row);const parts=[map];
+  if(missing.length){const sug=el('div','agent-suggest');sug.append(el('h3',null,found.length?'Belum terpasang di komputer ini':'Pasang AI agent dulu'));const list=el('div','agent-suggest-list');
+    for(const h of missing){const b=el('button','agent-suggest-item');b.type='button';b.append(agentAvatar(h),el('strong',null,h.name),el('span','agent-kind',look(h)[2]),el('span','agent-suggest-go','Cara pasang →'));b.onclick=()=>openInstall(h);list.append(b)}
+    sug.append(list);parts.push(sug)}
+  host.replaceChildren(...parts);requestAnimationFrame(drawAgentLinks);
+  const todo=found.filter(h=>!hubOn(h));show(all,todo.length>1);all.onclick=()=>connectAll(todo,all)}
+// Curved links from SantriHub to every detected agent: solid when connected to the hub.
+function drawAgentLinks(){const map=$('#home-agents .agent-map-inner');if(!map)return;const svg=map.querySelector('.agent-links'),hub=map.querySelector('.hub-node'),box=map.getBoundingClientRect();if(!box.width)return;
+  const hb=hub.getBoundingClientRect(),x0=hb.left+hb.width/2-box.left,y0=hb.bottom-box.top,ns='http://www.w3.org/2000/svg';svg.setAttribute('viewBox',`0 0 ${box.width} ${box.height}`);
+  svg.replaceChildren(...[...map.querySelectorAll('.agent-node')].map(n=>{const r=n.getBoundingClientRect(),x1=r.left+r.width/2-box.left,y1=r.top-box.top,my=(y0+y1)/2,p=document.createElementNS(ns,'path');
+    p.setAttribute('d',`M${x0} ${y0} C${x0} ${my} ${x1} ${my} ${x1} ${y1}`);if(n.classList.contains('on'))p.setAttribute('class','on');return p}))}
+new ResizeObserver(()=>drawAgentLinks()).observe($('#home-agents'));
+$('#agents-rescan').onclick=e=>busy(e.currentTarget,'Memeriksa AI agent di komputer ini…',async()=>{await loadAgents();done(`✓ ${detectedAgents().length} AI agent terdeteksi.`)});
+// Upload history: own skills and MCP, newest first.
+function renderHomeUploads(){const host=$('#home-uploads');if(!host)return;
+  const rows=[...librarySkills.map(s=>({kind:'Skill',name:s.id,from:libraryOrigin(s),at:s.updatedAt||s.importedAt})),...myMcp.map(m=>({kind:'MCP',name:m.name,from:m.from?'dari '+m.from:'MCP Anda',at:m.addedAt}))]
+    .filter(r=>r.at).sort((p,q)=>String(q.at).localeCompare(String(p.at))).slice(0,6);
+  if(!rows.length){host.replaceChildren(el('p','muted','Belum ada upload. Klik Tambah untuk mengunggah skill atau MCP.'));return}
+  const list=el('ol','activity-list feed-list');for(const r of rows){const li=el('li','activity-row upload-row');li.append(el('span','upload-kind '+(r.kind==='MCP'?'mcp':'skill'),r.kind),el('strong',null,r.name),el('code',null,r.from),el('time',null,activityTime(r.at)));li.title=r.from;list.append(li)}
+  host.replaceChildren(list)}
+$$('dialog [data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
+for(const id of ['path-choice','path-info','agent-install'])$('#'+id).addEventListener('click',e=>{if(e.target===e.currentTarget)e.currentTarget.close()});
+// Beranda tabs jump to their section; Ctrl+K searches from any page.
+$$('[data-home-jump]').forEach(b=>b.onclick=()=>{$$('[data-home-jump]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+  const id=b.dataset.homeJump;if(id==='page-home')window.scrollTo({top:0,behavior:'smooth'});else document.getElementById(id)?.scrollIntoView({behavior:'smooth',block:'start'})});
+document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'&&!document.querySelector('dialog[open]')){e.preventDefault();if($('#page-home').hidden)go('home');$('#home-search').focus()}});
+// Light (Zyvaro) by default; the choice is kept per browser.
+function setTheme(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('santrihub-theme',t)}catch{}
+  const b=$('#theme-toggle');b.setAttribute('aria-pressed',String(t==='dark'));b.querySelector('.sr-only').textContent=t==='dark'?'Mode terang':'Mode gelap';b.title=t==='dark'?'Mode terang':'Mode gelap'}
+setTheme(document.documentElement.dataset.theme==='dark'?'dark':'light');
+$('#theme-toggle').onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
+function renderFlow(){renderHomeSteps();renderLibrary();renderHomePaths();renderHomeAgents();renderCollection();renderAgentChecks();$('#stat-library').textContent=librarySkills.length?`+ ${librarySkills.length} skill milik Anda`:'+ skill milik Anda'}
 $$('[data-collection-kind]').forEach(b=>b.onclick=()=>{collectionKind=b.dataset.collectionKind;renderCollection()});
 $('#collection-search').oninput=renderCollection;
 const ADD_SOURCES={
@@ -216,9 +572,8 @@ function renderPaketCards(items){const host=$('#paket-cards');
     if(!own.length&&p.id!=='mine'&&!p.custom)return null;
     const card=el('button','paket-card paket-'+p.color+(collectionPaket===p.id?' on':''));card.type='button';card.setAttribute('aria-pressed',String(collectionPaket===p.id));
     card.onclick=()=>{collectionPaket=collectionPaket===p.id?'all':p.id;renderCollection()};
-    const head=el('span','paket-card-head');head.append(el('span','paket-icon',p.icon),el('strong',null,p.short));card.append(head,el('small','paket-desc',p.description));
-    card.append(el('span','paket-meta',[sk&&`${sk} skill`,mc&&`${mc} MCP`].filter(Boolean).join(' · ')||'Belum ada isi'),el('span','paket-by',p.author?'oleh '+p.author:''));
-    if(p.starter)card.append(el('span','paket-starter','Mulai dari: '+p.starter));return card}).filter(Boolean),newPaketCard())}
+    const head=el('span','paket-card-head');head.append(el('span','paket-icon',p.icon),el('strong',null,p.short));card.title=p.description||'';
+    card.append(head,el('span','paket-meta',[sk&&`${sk} skill`,mc&&`${mc} MCP`].filter(Boolean).join(' · ')||'Belum ada isi'));return card}).filter(Boolean),newPaketCard())}
 function renderPaketFilters(){const host=$('#collection-filters');if(collectionPaket==='all'){host.replaceChildren();return}
   const p=paketById(collectionPaket),b=el('button','filter-chip paket-'+(p.color||'gray'));b.type='button';b.setAttribute('aria-label',`Hapus saringan paket ${p.short}`);
   b.append(el('span',null,'Paket: '+p.short),el('span',null,'×'));b.onclick=()=>{collectionPaket='all';renderCollection()};host.replaceChildren(b)}
@@ -253,22 +608,48 @@ function newPaketCard(){const card=el('div','paket-card paket-new paket-gray'),o
   card.append(open,el('small','paket-desc','Kelompokkan skill dan MCP milik Anda, misalnya per klien, per kelas, atau per proyek.'));return card}
 function deletePaket(p,btn){if(!confirm(`Hapus paket ${p.short}? Skill dan MCP di dalamnya tetap ada di "Milik saya".`))return;
   busy(btn,`Menghapus paket ${p.short}…`,async()=>{await post('/api/my-paket/delete',{id:p.id});collectionPaket='all';done(`✓ Paket ${p.short} dihapus.`);await loadAgents()})}
-function renderHomePaths(){const host=$('#home-paths');if(!host)return;const items=allItems(),paths=(catalog.paket||[]).filter(p=>p.id!=='umum'&&(p.fit?.length||p.starter));
+// Beranda shows each paket as icon + title only; everything else is in the paket dialog.
+let openPaketId=null;
+const homePaket=()=>(catalog.paket||[]).filter(p=>p.id!=='umum'&&(p.fit?.length||p.starter));
+function renderHomePaths(){const host=$('#home-paths');if(!host)return;const paths=homePaket();
   if(!paths.length){host.replaceChildren(el('p','muted','Memuat paket…'));return}
-  const found=detectedAgents();
-  host.replaceChildren(...paths.map(p=>{const own=items.filter(r=>r.paket.includes(p.id)),card=el('article','path-card paket-'+p.color),head=el('div','paket-card-head');
-    head.append(el('span','paket-icon',p.icon),el('strong',null,p.short));card.append(head,el('p','paket-desc',p.description));
-    if(p.fit?.length){const ul=el('ul','path-fit');for(const f of p.fit)ul.append(el('li',null,f));card.append(el('span','path-fit-label','Cocok jika'),ul)}
-    const sk=own.filter(r=>r.kind==='skill').length,mc=own.filter(r=>r.kind==='mcp').length;
-    card.append(el('span','paket-meta',[`${sk} skill`,mc&&`${mc} MCP`,p.author&&`oleh ${p.author}`].filter(Boolean).join(' · ')));
-    if(p.starter)card.append(el('span','paket-starter',`Setelah dipasang, mulai di chat dengan skill ${p.starter}`));
-    const on=found.map(h=>[h,own.filter(r=>agentCell(h,r.kind,r.id).on).length]).filter(([,n])=>n);
-    if(on.length)card.append(el('small','collection-active on','Terpasang di '+on.map(([h,n])=>`${h.name} (${n}/${own.length})`).join(', ')));
-    const bar=el('div','path-actions');
-    if(found.length){const sel=document.createElement('select');sel.setAttribute('aria-label','AI agent untuk paket '+p.short);for(const h of found){const o=el('option',null,h.name);o.value=h.id;sel.append(o)}
-      const install=el('button','home-create','Pasang paket');install.type='button';
-      install.onclick=()=>{const h=agents.find(x=>x.id===sel.value);bulkToggle(h,own.filter(r=>agentCell(h,r.kind,r.id).state!=='foreign'),true)};bar.append(sel,install)}
-    const view=el('button','secondary','Lihat isi');view.type='button';view.onclick=()=>{collectionPaket=p.id;go('collection');renderCollection()};bar.append(view);card.append(bar);return card}))}
+  const found=detectedAgents(),card=el('div','path-hero'),add=el('button','path-add');add.type='button';add.id='path-add';
+  const plus=el('span','path-add-ic');plus.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+  add.append(plus,el('strong',null,'Mulai jalur proyek'),el('span',null,paths.map(p=>p.short).join(' atau ')));add.onclick=openPathChoice;
+  const info=el('button','path-info','!');info.type='button';info.title='Apa bedanya '+paths.map(p=>p.short).join(' dan ')+'?';info.setAttribute('aria-label',info.title);info.onclick=openPathInfo;
+  const chips=el('div','path-on');for(const p of paths){const own=allItems().filter(r=>r.paket.includes(p.id)),on=found.filter(h=>own.some(r=>agentCell(h,r.kind,r.id).on));
+    if(on.length){const c=el('button','path-chip paket-'+p.color);c.type='button';c.append(el('span','paket-icon',p.icon),el('span',null,p.short+' · '+on.map(h=>h.name).join(', ')));c.onclick=()=>openPaket(p.id);chips.append(c)}}
+  card.append(info,add);if(chips.children.length)card.append(chips);host.replaceChildren(card);
+  if(openPaketId&&$('#paket-dialog').open)renderPaketDialog(openPaketId)}
+function openPathChoice(){const body=$('#path-choice-body'),list=el('div','path-options');
+  for(const p of homePaket()){const o=el('button','path-option paket-'+p.color);o.type='button';o.append(el('span','paket-icon',p.icon),el('strong',null,p.short),el('span',null,p.fit?.[0]||p.description||''));
+    o.onclick=()=>{$('#path-choice').close();openPaket(p.id)};list.append(o)}
+  const more=el('button','link-btn','Apa bedanya? →');more.type='button';more.onclick=()=>{$('#path-choice').close();openPathInfo()};
+  body.replaceChildren(list,more);$('#path-choice').showModal()}
+function openPathInfo(){const cols=homePaket().map(p=>{const col=el('section','path-info-col paket-'+p.color),head=el('div','path-info-head');head.append(el('span','paket-icon',p.icon),el('strong',null,p.short));
+    col.append(head,el('p',null,p.description));if(p.fit?.length){const ul=el('ul','path-fit');for(const f of p.fit)ul.append(el('li',null,f));col.append(el('span','path-fit-label','Cocok jika'),ul)}
+    if(p.starter)col.append(el('small','muted','Skill awal: '+p.starter));const go=el('button','secondary','Lihat paket '+p.short);go.type='button';go.onclick=()=>{$('#path-info').close();openPaket(p.id)};col.append(go);return col});
+  const grid=el('div','path-info-grid');grid.append(...cols);$('#path-info-body').replaceChildren(grid);$('#path-info').showModal()}
+function renderPaketDialog(id){const p=(catalog.paket||[]).find(x=>x.id===id);if(!p)return;
+  const own=allItems().filter(r=>r.paket.includes(p.id)),found=detectedAgents(),body=$('#paket-body'),dlg=$('#paket-dialog');
+  dlg.className='wizard-dialog paket-dialog paket-'+p.color;$('#paket-dialog-icon').textContent=p.icon||'';$('#paket-title').textContent=p.short;
+  const parts=[el('p','paket-desc',p.description)];
+  if(p.fit?.length){const ul=el('ul','path-fit');for(const f of p.fit)ul.append(el('li',null,f));parts.push(el('span','path-fit-label','Cocok jika'),ul)}
+  const sk=own.filter(r=>r.kind==='skill'&&!r.mine).length,extra=own.filter(r=>r.kind==='skill'&&r.mine).length,mc=own.filter(r=>r.kind==='mcp').length;
+  const facts=el('dl','paket-facts');const fact=(k,v)=>{if(v)facts.append(el('dt',null,k),el('dd',null,String(v)))};
+  fact('Skill bawaan',sk);fact('Tambahan Anda',extra);fact('MCP',mc);fact('Skill awal',p.starter);fact('Oleh',p.author);
+  const on=found.map(h=>[h,own.filter(r=>agentCell(h,r.kind,r.id).on).length]).filter(([,n])=>n);
+  fact('Terpasang di',on.map(([h,n])=>`${h.name} (${n}/${own.length})`).join(', '));parts.push(facts);
+  const bar=el('div','path-actions');
+  if(found.length){const sel=document.createElement('select');sel.setAttribute('aria-label','AI agent untuk paket '+p.short);for(const h of found){const o=el('option',null,h.name);o.value=h.id;sel.append(o)}
+    const install=el('button','home-create','Pasang paket');install.type='button';
+    install.onclick=()=>{const h=agents.find(x=>x.id===sel.value);dlg.close();bulkToggle(h,own.filter(r=>agentCell(h,r.kind,r.id).state!=='foreign'),true)};bar.append(sel,install)}
+  const view=el('button','secondary','Lihat isi');view.type='button';view.onclick=()=>{dlg.close();collectionPaket=p.id;go('collection');renderCollection()};bar.append(view);parts.push(bar);
+  body.replaceChildren(...parts)}
+function openPaket(id){openPaketId=id;renderPaketDialog(id);$('#paket-dialog').showModal()}
+$('#paket-close').onclick=()=>$('#paket-dialog').close();
+$('#paket-dialog').addEventListener('click',e=>{if(e.target===e.currentTarget)e.currentTarget.close()});
+$('#paket-dialog').addEventListener('close',()=>{openPaketId=null});
 
 // ─ Tes koneksi MCP: /api/mcp/test starts the server like an agent would and lists its tools ─
 function mcpTestView(r){const box=el('div','mcp-test '+(r.ok?'ok':'bad'));
@@ -282,7 +663,7 @@ function testMcp(id,host,btn){host.querySelector('.mcp-test')?.remove();const wa
 
 // ─ Cek per AI agent (Cek & Tes): reload steps per agent, MCP connection tests, prompts to paste in chat ─
 const RELOAD={
-  'antigravity':['Klik <b>Cek &amp; Tes</b> di kanan atas lalu <b>Restart Antigravity</b>, atau tutup dan buka lagi Antigravity.','Buka chat Agent baru (skill dibaca saat sesi dimulai).'],
+  'antigravity':['Klik <b>Restart</b>, atau tutup lalu buka lagi Antigravity.','Buka chat Agent baru.'],
   'claude-code':['Keluar dari sesi Claude Code (<code>/exit</code>), lalu jalankan <code>claude</code> lagi.','Ketik <code>/mcp</code> untuk melihat MCP yang tersambung.'],
   'codex':['Tutup Codex, lalu jalankan <code>codex</code> lagi (atau buka ulang aplikasi Codex).','Ketik <code>/mcp</code> untuk melihat MCP dan tool-nya.'],
   'gemini-cli':['Keluar (<code>/quit</code>), lalu jalankan <code>gemini</code> lagi.','Ketik <code>/mcp</code> untuk melihat status MCP.'],
@@ -294,50 +675,67 @@ const mcpPrompt=name=>`Sebutkan semua tool dari MCP "${name}" yang tersedia untu
 // The collection id behind an MCP name in an agent config, when SantriHub knows it.
 function mcpIdFor(name){if(name==='santrihub')return GATEWAY_ID;
   return catalog.mcpServers.some(m=>m.id===name)||myMcp.some(m=>m.id===name)?name:null}
-async function copyText(text,btn){try{await navigator.clipboard.writeText(text);const old=btn.textContent;btn.textContent='Tersalin ✓';setTimeout(()=>{btn.textContent=old},1400)}catch{const host=btn.closest('li')||btn.parentElement;host.querySelector('.copy-manual')?.remove();const pre=el('pre','copy-manual',text);host.append(pre);getSelection().selectAllChildren(pre);status('Clipboard diblokir: teks sudah diseleksi, tekan Ctrl+C.',true)}}
-let checkAgent='',checkAll=false;const CHECK_LIMIT=6;
+async function copyText(text,btn){try{await navigator.clipboard.writeText(text);const old=btn.innerHTML;btn.classList.add('copied');btn.textContent=btn.classList.contains('ck-icon')?'✓':'Tersalin ✓';setTimeout(()=>{btn.innerHTML=old;btn.classList.remove('copied')},1400)}catch{const host=btn.closest('li')||btn.parentElement;host.querySelector('.copy-manual')?.remove();const pre=el('pre','copy-manual',text);host.append(pre);getSelection().selectAllChildren(pre);status('Clipboard diblokir: teks sudah diseleksi, tekan Ctrl+C.',true)}}
+let checkAgent='',checkAll=false,checkKind='all',checkQuery='';const CHECK_LIMIT=10;
+const CK_COPY='<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>';
+// One agent at a time: reload strip on top, then every skill / MCP with a copy-prompt (and MCP test) button.
 function renderAgentChecks(){const host=$('#agent-checks');if(!host)return;const found=detectedAgents();
   if(!agents.length){host.replaceChildren(el('p','muted','AI agent belum dimuat.'));return}
   if(!found.length){host.replaceChildren(el('p','muted','Belum ada AI agent terdeteksi di komputer ini.'));return}
-  if(!found.some(h=>h.id===checkAgent))checkAgent=found[0].id;const h=found.find(x=>x.id===checkAgent);
-  const tabs=el('div','agent-tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','AI agent');
-  for(const x of found){const t=el('button','agent-tab');t.type='button';t.setAttribute('role','tab');t.setAttribute('aria-selected',String(x.id===checkAgent));
-    t.append(el('span',null,x.name),el('span','count',String(x.skills.length+x.mcp.names.length)));t.onclick=()=>{checkAgent=x.id;checkAll=false;renderAgentChecks()};tabs.append(t)}
-  const card=el('article','agent-check');card.setAttribute('role','tabpanel');card.setAttribute('aria-label',h.name);
-  const mine=h.skills.filter(s=>s.managed).map(s=>s.id),others=h.skills.filter(s=>!s.managed).map(s=>s.id);
-  if(h.mcp.valid===false)card.append(el('p','agent-check-warn','Config MCP agent ini tidak bisa dibaca (JSON/TOML rusak). Perbaiki file-nya dulu: '+h.mcp.file));
-  const stepHead=(n,text)=>{const t=el('h3');t.append(el('i',null,n),document.createTextNode(text));return t};
-  const reload=el('section','agent-check-step'),steps=el('ol','agent-check-steps');for(const s of RELOAD[h.id]||[`Reload ${h.name}.`]){const li=el('li');li.innerHTML=s;steps.append(li)}
-  reload.append(stepHead('1','Muat ulang '+h.name),el('p',null,'Agent membaca skill dan MCP saat mulai, jadi muat ulang setelah mengaktifkan.'),steps);
-  if(h.id==='antigravity'){const b=el('button','secondary','Buka Cek & Tes Antigravity');b.type='button';b.onclick=()=>$('#check-test').click();reload.append(b)}
-  const test=el('section','agent-check-step'),list=el('ul','agent-check-items');
-  test.append(stepHead('2','Coba di chat'),el('p',null,`Tes koneksi MCP di sini, atau salin prompt uji lalu tempel di chat ${h.name}.`));
-  const rows=[];
-  for(const name of h.mcp.names){const li=el('li','agent-check-item'),id=mcpIdFor(name);li.append(el('span','agent-kind mcp','MCP'),el('span','agent-check-name',name));
-    const acts=el('span','agent-check-actions');
-    if(id){const t=el('button','secondary','Tes koneksi');t.type='button';t.onclick=()=>testMcp(id,li,t);acts.append(t)}
-    else acts.append(el('small','muted','bukan dari SantriHub'));
-    const c=el('button','secondary','Salin prompt');c.type='button';c.onclick=()=>copyText(mcpPrompt(name),c);acts.append(c);li.append(acts);rows.push(li)}
-  for(const id of [...mine,...others]){const li=el('li','agent-check-item'),name=el('span','agent-check-name',id+(mine.includes(id)?'':' (milik Anda)'));name.title=id;
-    li.append(el('span','agent-kind skill'+(mine.includes(id)?'':' mine'),'SKILL'),name);
-    const acts=el('span','agent-check-actions'),c=el('button','secondary','Salin prompt');c.type='button';c.onclick=()=>copyText(skillPrompt(id),c);acts.append(c);li.append(acts);rows.push(li)}
-  if(!rows.length){const empty=el('li','muted','Belum ada skill atau MCP di agent ini. ');const a=el('button','secondary','Aktifkan dulu →');a.type='button';a.onclick=()=>go('agents');empty.append(a);rows.push(empty)}
-  list.append(...(checkAll?rows:rows.slice(0,CHECK_LIMIT)));test.append(list);
-  if(rows.length>CHECK_LIMIT){const more=el('button','secondary',checkAll?'Tampilkan lebih sedikit':`Tampilkan semua (${rows.length})`);more.type='button';more.onclick=()=>{checkAll=!checkAll;renderAgentChecks()};test.append(more)}
-  card.append(reload,test);host.replaceChildren(tabs,card)}
+  if(!found.some(h=>h.id===checkAgent))checkAgent=found[0].id;const h=found.find(x=>x.id===checkAgent),known=Object.fromEntries(allItems({gateway:true}).map(r=>[r.kind+':'+r.id,r]));
+  const tabs=el('div','ck-agents');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','AI agent');
+  for(const x of found){const t=el('button','ck-agent');t.type='button';t.setAttribute('role','tab');t.setAttribute('aria-selected',String(x.id===checkAgent));
+    t.append(agentAvatar(x,'ck-av'),el('span',null,x.name),el('span','ck-count',String(x.skills.length+x.mcp.names.length)));if(orbitReload[x.id]){const d=el('i','ck-dot');d.title='Perlu dimuat ulang';t.append(d)}
+    t.onclick=()=>{checkAgent=x.id;checkAll=false;checkKind='all';checkQuery='';renderAgentChecks()};tabs.append(t)}
+  const card=el('article','ck-card');card.setAttribute('role','tabpanel');card.setAttribute('aria-label',h.name);
+  const mine=h.skills.filter(s=>s.managed).map(s=>s.id),others=h.skills.filter(s=>!s.managed).map(s=>s.id),stale=!!orbitReload[h.id];
+  // Header: who, how many, and whether it still has to reload.
+  const head=el('header','ck-head'),title=el('div','ck-title');title.append(el('strong',null,h.name),el('small',null,`${h.skills.length} skill · ${h.mcp.names.length} MCP`));
+  head.append(agentAvatar(h,'ck-av lg'),title,el('span','ck-state'+(stale?' warn':' ok'),stale?'Perlu dimuat ulang':'Siap diuji'));card.append(head);
+  if(h.mcp.valid===false)card.append(el('p','ck-warn','Config MCP tidak bisa dibaca (JSON/TOML rusak): '+h.mcp.file));
+  // 1 · Reload.
+  const reload=el('section','ck-step ck-reload'+(stale?' warn':'')),steps=el('ol','ck-steps');for(const s of RELOAD[h.id]||[`Reload ${h.name}.`]){const li=el('li');li.innerHTML=s;steps.append(li)}
+  const rTxt=el('div','ck-step-main');rTxt.append(el('b',null,'Muat ulang'),steps);
+  const rActs=el('div','ck-step-acts');
+  if(h.id==='antigravity'){const r=el('button','ck-btn primary','Restart');r.type='button';r.onclick=async()=>{await reloadAgents([h],r);renderAgentChecks()};
+    const p=el('button','ck-btn','Uji bukti');p.type='button';p.title='Cek & Tes Antigravity: bukti skill terbaca lewat callback MCP';p.onclick=()=>$('#check-test').click();rActs.append(r,p)}
+  else if(stale){const r=el('button','ck-btn','Sudah ✓');r.type='button';r.title='Tandai '+h.name+' sudah dimuat ulang';r.onclick=()=>{markReload(h.id,false);renderOrbit();renderAgentChecks()};rActs.append(r)}
+  reload.append(el('span','ck-num','1'),rTxt,rActs);
+  // 2 · Test in chat.
+  const rows=[...h.mcp.names.map(name=>({kind:'mcp',name,id:mcpIdFor(name),own:!mcpIdFor(name)})),...[...mine,...others].map(id=>({kind:'skill',name:id,id,own:!mine.includes(id)}))];
+  const test=el('section','ck-step ck-test'),bar=el('div','ck-bar'),filt=el('div','ck-filter');filt.setAttribute('role','group');filt.setAttribute('aria-label','Jenis');
+  const list=el('ul','ck-items'),more=el('button','ck-more');more.type='button';
+  for(const [k,label] of [['all','Semua'],['skill','Skill'],['mcp','MCP']]){const n=k==='all'?rows.length:rows.filter(r=>r.kind===k).length;if(k!=='all'&&!n)continue;
+    const b=el('button',null,label);b.type='button';b.append(el('small',null,String(n)));b.setAttribute('aria-pressed',String(checkKind===k));b.onclick=()=>{checkKind=k;checkAll=false;for(const x of filt.children)x.setAttribute('aria-pressed',String(x===b));fill()};filt.append(b)}
+  const search=el('label','ck-search');search.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>';
+  const q=el('input');q.type='search';q.placeholder='Cari…';q.value=checkQuery;q.setAttribute('aria-label','Cari skill atau MCP');q.oninput=()=>{checkQuery=q.value;checkAll=false;fill()};search.append(q);
+  const twoHead=el('div','ck-step-main');twoHead.append(el('b',null,'Uji di chat'),el('small',null,'Salin prompt, tempel di chat '+h.name+'.'));
+  bar.append(el('span','ck-num','2'),twoHead);if(rows.length)bar.append(filt,search);test.append(bar,list,more);
+  const item=r=>{const li=el('li','ck-item'),row=known[r.kind+':'+(r.kind==='mcp'?r.id||r.name:r.id)]||{kind:r.kind,id:r.name,label:r.name,paket:[]};
+    const name=el(known[r.kind+':'+(r.id||r.name)]?'button':'span','ck-name',r.name);name.title=r.name;if(name.tagName==='BUTTON'){name.type='button';name.onclick=()=>openItem(row)}
+    const acts=el('span','ck-acts');li.append(itemIcon(row),name);if(r.own){li.classList.add('own');name.title=r.name+' · bukan dari SantriHub (tidak disentuh)'}
+    if(r.kind==='mcp'&&r.id){const t=el('button','ck-btn','Tes');t.type='button';t.title='Tes koneksi MCP';t.onclick=()=>testMcp(r.id,li,t);acts.append(t)}
+    const c=el('button','ck-icon');c.type='button';c.innerHTML=CK_COPY;c.title='Salin prompt uji';c.setAttribute('aria-label','Salin prompt uji '+r.name);
+    c.onclick=()=>copyText(r.kind==='mcp'?mcpPrompt(r.name):skillPrompt(r.name),c);acts.append(c);li.append(acts);return li};
+  function fill(){const term=checkQuery.trim().toLowerCase(),shown=rows.filter(r=>(checkKind==='all'||r.kind===checkKind)&&(!term||r.name.toLowerCase().includes(term)));
+    if(!rows.length){const empty=el('li','ck-empty');const a=el('button','ck-btn primary','Aktifkan →');a.type='button';a.onclick=()=>go('agents');empty.append(el('span',null,'Belum ada skill atau MCP di agent ini.'),a);list.replaceChildren(empty)}
+    else if(!shown.length)list.replaceChildren(el('li','ck-empty','Tidak ada yang cocok.'));
+    else list.replaceChildren(...(checkAll?shown:shown.slice(0,CHECK_LIMIT)).map(item));
+    more.hidden=shown.length<=CHECK_LIMIT;more.textContent=checkAll?'Lebih sedikit':`Tampilkan semua · ${shown.length}`;more.onclick=()=>{checkAll=!checkAll;fill()}}
+  fill();card.append(reload,test);host.replaceChildren(tabs,card)}
 
 // ─ Tur singkat: a spotlight walks the 4-step flow; the card sits next to what it explains. Shown once per browser, replay from Beranda or the profile menu ─
 const TOUR_KEY='santrihub-tour-v1';
 // target: selectors tried in order; the first one that is on screen wins, and all its visible matches are highlighted together.
 const TOUR=[
   {page:'home',target:['.home-hero'],title:'Selamat datang di SantriHub',text:'Satu tempat untuk skill dan MCP semua AI agent Anda: Claude Code, Codex, Antigravity, Gemini CLI, Cursor, VS Code, dan Windsurf.',points:['Tur ini menunjukkan tiap bagian satu per satu. Kurang dari 1 menit.']},
-  {page:'home',target:['.nav-flow','.sidebar-rail .rail-step','#nav-toggle'],title:'4 langkah, dari atas ke bawah',text:'Semua pekerjaan mengikuti alur ini: Tambah → Koleksi → Aktifkan → Cek & Tes.',points:['Klik nomor langkah kapan saja untuk pindah.']},
-  {page:'home',target:['#home-paths'],title:'Pilih jalur proyek',text:'Paket Apps Script atau Monorepo berisi skill yang sudah disusun Santriverse.',points:['Pilih AI agent, lalu klik "Pasang paket". Semua isinya aktif sekaligus.']},
+  {page:'home',target:['.nav-flow','.sidebar-rail .rail-btn','#nav-toggle'],title:'4 langkah, dari atas ke bawah',text:'Semua pekerjaan mengikuti alur ini: Tambah → Koleksi → Aktifkan → Cek & Tes.',points:['Klik langkah kapan saja untuk pindah.']},
+  {page:'home',target:['#home-paths'],title:'Pilih jalur proyek',text:'Paket Apps Script atau Monorepo berisi skill yang sudah disusun Santriverse.',points:['Klik + untuk memilih Apps Script atau Monorepo, lalu pasang ke AI agent. Tombol ! menjelaskan bedanya.']},
   {page:'add',target:['#drop-zone','.smart-import'],title:'1 · Tambah: impor pintar',text:'Tarik banyak ZIP, folder, atau file .md sekaligus ke kotak ini.',points:['SKILL.md dibuat otomatis bila belum ada.','Klik "Pindai & pratinjau" untuk melihat isinya sebelum disimpan.']},
   {page:'add',target:['#mcp-paste-box'],title:'Tempel MCP',text:'Buka bagian ini untuk menempel config MCP (JSON), perintah npx/uvx, atau URL MCP.',points:['API key hanya disimpan di komputer ini.']},
   {page:'collection',target:['#paket-cards'],title:'2 · Koleksi per paket',text:'Semua yang Anda tambahkan berkumpul di sini, bersama katalog premium Santriverse.',points:['Klik satu paket untuk melihat isinya dan menyalakannya sekaligus di satu agent.']},
   {page:'collection',target:['#collection-list'],title:'Kartu skill & MCP',text:'Tiap kartu menunjukkan di agent mana item itu sudah aktif.',points:['MCP punya tombol "Tes koneksi" untuk memastikan ia benar-benar jalan.']},
-  {page:'agents',target:['.agents-scroll','#agents-cards'],title:'3 · Aktifkan per AI agent',text:'Centang tabel ini untuk menyalakan skill atau MCP di tiap agent.',points:['SantriHub hanya menyentuh file buatannya sendiri; config Anda yang lain aman.']},
+  {page:'agents',target:['#orbit-board','#wire-board','.agents-scroll'],title:'3 · Aktifkan per AI agent',text:'Centang tabel ini untuk menyalakan skill atau MCP di tiap agent.',points:['SantriHub hanya menyentuh file buatannya sendiri; config Anda yang lain aman.']},
   {page:'status',target:['.agent-checks-wrap'],title:'4 · Cek & Tes',text:'Pastikan semuanya benar-benar terbaca oleh AI agent.',points:['Tes MCP, muat ulang agent, lalu salin prompt uji ke chat.']}];
 let tourIndex=0,tourEl=null,tourWatch=null,tourFrame=0;const tour=$('#tour'),tourSpot=$('#tour-spot');
 function tourStorage(fn){try{return fn(localStorage)}catch{return null}}
@@ -470,7 +868,7 @@ let updateInfo=null;
 const updateDialog=$('#update-dialog');
 const selfUpdate=()=>document.documentElement.dataset.santrihubUpdate==='self';
 async function checkUpdate(){try{updateInfo=await getJson('/api/update');const btn=$('#update-btn');
-  if(updateInfo.available){btn.textContent='⬆ Update v'+updateInfo.latest;btn.title='SantriHub v'+updateInfo.latest+' tersedia (terpasang v'+updateInfo.current+')';btn.hidden=false}}catch{/* offline: no button */}}
+  if(updateInfo.available){btn.textContent='⬆ Update v'+updateInfo.latest;btn.title='SantriHub v'+updateInfo.latest+' tersedia (terpasang v'+updateInfo.current+')';btn.hidden=false}refreshBell()}catch{/* offline: no button */}}
 function openUpdate(){if(!updateInfo)return;const self=selfUpdate();
   $('#update-current').textContent='v'+updateInfo.current;$('#update-latest').textContent='v'+updateInfo.latest;
   $('#update-notes').href=updateInfo.releaseUrl;$('#update-command').textContent=updateInfo.command;$('#update-feedback').textContent='';
@@ -509,19 +907,40 @@ $('#update-now').onclick=async()=>{const btn=$('#update-now'),fb=$('#update-feed
 checkUpdate();
 
 // ─ Navigation ─
-function go(page){if(!PAGES[page])page='home';$$('[data-page]').forEach(b=>b.dataset.page===page?b.setAttribute('aria-current','page'):b.removeAttribute('aria-current'));
+function go(page){if(!PAGES[page])page='home';$$('[data-rail-page]').forEach(b=>b.classList.toggle('active',b.dataset.railPage===page));$$('.strip-tab').forEach(b=>b.classList.toggle('active',page==='home'));$$('[data-page]').forEach(b=>b.dataset.page===page?b.setAttribute('aria-current','page'):b.removeAttribute('aria-current'));
   Object.keys(PAGES).forEach(p=>show($('#page-'+p),p===page));$('#crumb').textContent='SantriHub / '+PAGES[page];
   if(location.hash!=='#'+page)history.replaceState(null,'','#'+page);closeNav();syncFx(page);stopStatusPoll();if(page==='status'&&csrf){loadStatus();loadTargets()}if(page==='repos'&&csrf)loadRepos();if(page==='extensions')loadExtensions();if(['agents','home','collection','status'].includes(page)&&csrf)loadAgents();if(page==='library'&&csrf)loadLibrary()}
 $$('[data-page]').forEach(b=>b.onclick=()=>go(b.dataset.page));
-$$('[data-rail-page]').forEach(b=>b.onclick=()=>{document.body.classList.remove('rail');go(b.dataset.railPage)});
+$$('[data-rail-page]').forEach(b=>b.onclick=()=>go(b.dataset.railPage));
 $$('[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));
 window.addEventListener('hashchange',()=>go(location.hash.slice(1)));
 const toggle=$('#nav-toggle');function closeNav(){document.body.classList.remove('nav-open');toggle.setAttribute('aria-expanded','false');show($('#nav-backdrop'),false)}
 toggle.onclick=()=>{const open=document.body.classList.toggle('nav-open');toggle.setAttribute('aria-expanded',String(open));show($('#nav-backdrop'),open)};
 $('#nav-backdrop').onclick=closeNav;$('#close-sidebar').onclick=closeNav;
-$('#collapse-sidebar').onclick=()=>document.body.classList.add('rail');
-$('#rail-toggle').onclick=()=>document.body.classList.remove('rail');
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeNav();closeProfile();closeScope()}});
+// The panel next to the rail opens and closes like Zyvaro's; the choice is kept per browser.
+function setPanel(open){document.body.classList.toggle('rail',!open);try{localStorage.setItem('santrihub-panel',open?'open':'closed')}catch{}}
+const togglePanel=()=>setPanel(document.body.classList.contains('rail'));
+try{if(localStorage.getItem('santrihub-panel')==='closed')document.body.classList.add('rail')}catch{}
+$('#collapse-sidebar').onclick=()=>setPanel(false);$('#panel-open').onclick=()=>setPanel(true);$('#rail-toggle').onclick=()=>setPanel(true);
+document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&!e.shiftKey&&e.key.toLowerCase()==='b'&&!document.querySelector('dialog[open]')){e.preventDefault();togglePanel()}});
+// ⋯ menu: File, Edit, Tampilan, Jendela, Bantuan, each with a submenu, like a desktop app.
+const appMenu=$('#app-menu'),appMenuBtn=$('#app-menu-btn');
+function closeAppMenu(){show(appMenu,false);appMenuBtn.setAttribute('aria-expanded','false');$$('.app-submenu').forEach(m=>show(m,false));$$('[data-submenu]').forEach(b=>b.classList.remove('open'))}
+function openSub(b){$$('[data-submenu]').forEach(x=>x.classList.toggle('open',x===b));$$('.app-submenu').forEach(m=>show(m,m.id==='app-sub-'+b.dataset.submenu));$('#app-sub-'+b.dataset.submenu).style.top=b.offsetTop+'px'}
+appMenuBtn.onclick=e=>{e.stopPropagation();if(!appMenu.hidden)return closeAppMenu();show(appMenu);appMenuBtn.setAttribute('aria-expanded','true');openSub($('[data-submenu]'))};
+$$('[data-submenu]').forEach(b=>{b.onmouseenter=()=>openSub(b);b.onclick=e=>{e.stopPropagation();openSub(b)}});
+async function aboutHub(){try{const u=await getJson('/api/update');done(`SantriHub v${u.current}${u.available?` · versi baru v${u.latest} tersedia`:' · versi terbaru'}.`)}catch(e){fail(e)}}
+async function railUpdate(){if(!$('#update-btn').hidden)return openUpdate();status('Mengecek pembaruan…');await checkUpdate();if(!$('#update-btn').hidden)openUpdate();else done('SantriHub sudah versi terbaru.')}
+const APP_CMD={home:()=>go('home'),add:()=>go('add'),github:()=>$('#add-item').click(),scope:()=>$('#scope-toggle').click(),logout:()=>$('#logout').click(),
+  search:()=>{if($('#page-home').hidden)go('home');$('#home-search').focus()},library:()=>go('library'),repos:()=>go('repos'),
+  theme:()=>$('#theme-toggle').click(),panel:togglePanel,reload:()=>location.reload(),
+  fullscreen:()=>{document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen().catch(()=>{})},agents:()=>go('agents'),check:()=>$('#check-test').click(),
+  tour:()=>openTour(),update:railUpdate,about:aboutHub};
+$$('[data-cmd]').forEach(b=>b.onclick=e=>{e.stopPropagation();closeAppMenu();setTimeout(()=>APP_CMD[b.dataset.cmd]?.(),0)});
+document.addEventListener('click',e=>{if(!appMenu.hidden&&!appMenu.contains(e.target))closeAppMenu()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!appMenu.hidden){closeAppMenu();appMenuBtn.focus()}});
+$('#rail-scope').onclick=e=>{e.stopPropagation();$('#scope-toggle').click()};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeNav();closeProfile();closeNotif();closeScope()}});
 const scopeBtn=$('#scope-toggle');
 function closeScope(){document.querySelector('.topbar').classList.remove('scope-open');scopeBtn.setAttribute('aria-expanded','false')}
 scopeBtn.onclick=e=>{e.stopPropagation();const open=!document.querySelector('.topbar').classList.contains('scope-open');document.querySelector('.topbar').classList.toggle('scope-open',open);scopeBtn.setAttribute('aria-expanded',String(open))};
@@ -531,11 +950,57 @@ document.addEventListener('click',e=>{if(!e.target.closest('#scope-bar,#scope-to
 $('#resize-handle').addEventListener('pointerdown',e=>{e.preventDefault();const move=ev=>{const w=Math.min(420,Math.max(210,ev.clientX));document.documentElement.style.setProperty('--sb-w',w+'px')};
   const up=()=>{removeEventListener('pointermove',move);removeEventListener('pointerup',up)};addEventListener('pointermove',move);addEventListener('pointerup',up)});
 
-// ─ Profile drop-up ─
-const profileBtn=$('#profile-trigger'),profileMenu=$('#profile-menu');
+// ─ Rail popovers: bell (notifications) and Akun (profile menu + profile dialog) ─
+let member=null,notifSeen=0;try{notifSeen=Number(localStorage.getItem('santrihub-notif-seen'))||0}catch{}
+const profileBtn=$('#profile-trigger'),profileMenu=$('#profile-menu'),notifBtn=$('#rail-update'),notifPanel=$('#notif-panel');
+// Next to the rail button, kept inside the window.
+function placePop(pop,btn){const r=btn.getBoundingClientRect();pop.style.left=Math.max(8,Math.min(innerWidth-pop.offsetWidth-8,r.right+10))+'px';pop.style.top=Math.max(8,Math.min(innerHeight-pop.offsetHeight-8,r.bottom-pop.offsetHeight))+'px'}
 function closeProfile(){show(profileMenu,false);profileBtn.setAttribute('aria-expanded','false')}
-profileBtn.onclick=e=>{e.stopPropagation();const open=profileMenu.hidden;show(profileMenu,open);profileBtn.setAttribute('aria-expanded',String(open))};
-document.addEventListener('click',e=>{if(!e.target.closest('.user-card'))closeProfile()});
+function closeNotif(){show(notifPanel,false);notifBtn.setAttribute('aria-expanded','false')}
+function syncThemeItem(){const dark=document.documentElement.dataset.theme==='dark';$('#profile-theme').setAttribute('aria-checked',String(dark))}
+profileBtn.onclick=e=>{e.stopPropagation();const open=profileMenu.hidden;closeNotif();show(profileMenu,open);profileBtn.setAttribute('aria-expanded',String(open));if(open){syncThemeItem();placePop(profileMenu,profileBtn)}};
+document.addEventListener('click',e=>{if(!e.target.closest('#profile-menu,#profile-trigger'))closeProfile();if(!e.target.closest('#notif-panel,#rail-update'))closeNotif()});
+addEventListener('resize',()=>{closeProfile();closeNotif()});
+$('#profile-open').onclick=()=>{closeProfile();openProfile()};
+$('#profile-activity').onclick=()=>{closeProfile();go('activity')};
+$('#profile-theme').onclick=()=>{$('#theme-toggle').click();syncThemeItem()};
+// Things that need the member: an update, agents still to reload. Recent activity follows.
+function notifItems(){const out=[];
+  if(updateInfo?.available)out.push({tone:'accent',icon:'↑',title:`SantriHub v${updateInfo.latest} tersedia`,text:`Terpasang v${updateInfo.current}`,act:'Update',run:openUpdate});
+  for(const h of agents)if(orbitReload[h.id])out.push({tone:'warn',icon:'↻',title:`Muat ulang ${h.name}`,text:'Agar skill & MCP baru terbaca',act:'Cek',run:()=>go('status')});
+  return out}
+function refreshBell(){try{const n=notifItems().length,dot=$('#rail-update .rail-dot');show(dot,n>0||activity.some(a=>a.at>notifSeen));dot.classList.toggle('soft',!n)}catch{/* before the rail is wired */}}
+function ago(d){const s=(Date.now()-d)/1000;return s<60?'Baru saja':s<3600?Math.floor(s/60)+' menit lalu':d.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}
+function renderNotif(){const rows=[];
+  for(const n of notifItems()){const row=el('div','notif-item '+n.tone),copy=el('span','notif-copy'),b=el('button','ck-btn',n.act);b.type='button';b.onclick=()=>{closeNotif();n.run()};
+    copy.append(el('strong',null,n.title),el('small',null,n.text));row.append(el('span','notif-ic',n.icon),copy,b);rows.push(row)}
+  const recent=activity.slice(0,6);
+  if(recent.length){rows.push(el('div','notif-label','Aktivitas terbaru'));for(const a of recent){const row=el('div','notif-item is-log'+(a.err?' bad':'')+(a.at>notifSeen?' new':'')),copy=el('span','notif-copy');
+    copy.append(el('strong',null,a.t.replace(/^✓\s*/,'')),el('small',null,ago(a.at)));row.append(el('span','notif-ic',a.err?'!':'✓'),copy);rows.push(row)}}
+  if(!rows.length){const e=el('div','notif-empty');e.append(el('span','notif-ic','✓'),el('strong',null,'Semua beres'),el('small',null,'Belum ada notifikasi di sesi ini.'));rows.push(e)}
+  $('#notif-list').replaceChildren(...rows);
+  $('#notif-ver').textContent=updateInfo?`SantriHub v${updateInfo.current}${updateInfo.available?'':' · terbaru'}`:''}
+function openNotif(){renderNotif();show(notifPanel);notifBtn.setAttribute('aria-expanded','true');placePop(notifPanel,notifBtn);
+  notifSeen=Date.now();try{localStorage.setItem('santrihub-notif-seen',String(notifSeen))}catch{}refreshBell()}
+notifBtn.onclick=e=>{e.stopPropagation();closeProfile();if(!notifPanel.hidden)return closeNotif();openNotif()};
+$('#notif-all').onclick=()=>{closeNotif();go('activity')};
+$('#notif-check').onclick=e=>{e.stopPropagation();const b=e.currentTarget;b.disabled=true;b.textContent='Mengecek…';
+  checkUpdate().finally(()=>{b.disabled=false;b.textContent='Cek pembaruan';if(!notifPanel.hidden){renderNotif();placePop(notifPanel,notifBtn)}if(updateInfo&&!updateInfo.available)status('SantriHub sudah versi terbaru.')})};
+function openProfile(){const dlg=$('#profile-dialog'),u=member||{},name=u.name||'Member',items=allItems();
+  $('#profile-avatar').textContent=(name.trim()[0]||'?').toUpperCase();$('#profile-title').textContent=name;
+  const plan=el('div','profile-plan'+(u.premium?' on':''));plan.append(el('span','plan-pill'+(u.premium?'':' off'),u.premium?'Premium aktif':'Belum premium'),el('small',null,u.premium?'Katalog & pembaruan Skills Santriverse terbuka.':'Aktifkan premium di website Santriverse.'));
+  const stats=el('div','profile-stats'),stat=(n,l)=>{const s=el('div','profile-stat');s.append(el('strong',null,String(n)),el('small',null,l));return s};
+  stats.append(stat(items.filter(r=>r.kind==='skill').length,'Skill'),stat(items.filter(r=>r.kind==='mcp').length,'MCP'),stat(agents.filter(h=>h.detected).length,'AI agent'));
+  const facts=el('dl','paket-facts'),fact=(k,v)=>facts.append(el('dt',null,k),el('dd',null,v));
+  fact('Nama',name);fact('Email',u.email||'—');
+  fact('Versi',updateInfo?`SantriHub v${updateInfo.current}${updateInfo.available?` · v${updateInfo.latest} tersedia`:' · terbaru'}`:'—');
+  fact('Data','Tersimpan lokal di komputer ini');
+  const actions=el('div','collection-actions'),tour=el('button','secondary','Tur singkat'),out=el('button','secondary danger','Keluar');tour.type=out.type='button';
+  tour.onclick=()=>{dlg.close();openTour()};out.onclick=()=>{dlg.close();$('#logout').click()};actions.append(tour,out);
+  if(updateInfo?.available){const up=el('button','home-create','Update ke v'+updateInfo.latest);up.type='button';up.onclick=()=>{dlg.close();openUpdate()};actions.append(up)}
+  $('#profile-body').replaceChildren(plan,stats,facts,actions);dlg.showModal()}
+$('#profile-dialog').addEventListener('click',e=>{if(e.target===e.currentTarget)e.currentTarget.close()});
+$('#profile-dialog [data-close]').onclick=()=>$('#profile-dialog').close();
 
 // ─ Typewriter sapaan (pola Home.tsx: type 58ms, erase 30ms, hold 1700ms) ─
 function typewriter(el,phrases){
@@ -548,14 +1013,14 @@ function typewriter(el,phrases){
 
 // ─ Auth ─
 async function checkSession(){try{const data=await getJson('/api/auth/status');csrf=data.csrf;showMember(data.user);return true}catch{return false}}
-function showMember(u){const name=(u&&u.name)||'Member',email=(u&&u.email)||'Premium aktif',initial=(name.trim()[0]||'?').toUpperCase();
+function showMember(u){member=u||{};const name=(u&&u.name)||'Member',email=(u&&u.email)||'Akun Santriverse',initial=(name.trim()[0]||'?').toUpperCase();
   $('#identity').textContent=name;$('#identity-sub').textContent=email;$('#menu-name').textContent=name;$('#menu-email').textContent=email;
-  $('#avatar').textContent=initial;$('#menu-avatar').textContent=initial;$('.rail-avatar').textContent=initial;
+  $('#avatar').textContent=initial;$('#menu-avatar').textContent=initial;const plan=$('#menu-plan');plan.textContent=u?.premium===false?'Free':'Premium';plan.classList.toggle('off',u?.premium===false);refreshBell();
   typewriter($('#home-greeting'),[`Selamat datang, ${name.split(' ')[0]}.`,`Siap memasang skill, ${name.split(' ')[0]}?`,'Skill & MCP untuk semua AI agent.']);
   show($('#account'));$('#locked').close();document.body.classList.remove('auth-locked');show($('#content'));syncFx(location.hash.slice(1)||'home');status('Premium aktif. Katalog siap.');maybeTour()}
 function closeCheckDialog(dialog,value='cancel'){if(!dialog.open||dialog.classList.contains('dialog-closing'))return;if(matchMedia('(prefers-reduced-motion: reduce)').matches){dialog.close(value);return}dialog.classList.add('dialog-closing');setTimeout(()=>{dialog.classList.remove('dialog-closing');if(dialog.open)dialog.close(value)},400)}
 function closeCheck(){stopCheckPoll();checkEpoch++;checkRequest?.abort();checkRequest=null;checkBusy=false;for(const id of ['#restart-confirm','#force-confirm']){const d=$(id);d.returnValue='cancel';if(d.open)d.close()}const d=$('#check-panel');if(d.open)closeCheckDialog(d,'cancel')}
-function showLocked(){stopStatusPoll();if($('#advanced-status').open)$('#advanced-status').close();if($('#repo-modal').open)$('#repo-modal').close();resetGithub();savedRepos=[];$('#saved-repos').replaceChildren();closeCheck();resetLocalSkills();resetLocalMcp();csrf='';lastStatus=null;selectedSkills.clear();activity.length=0;catalog={skills:[],mcpServers:[]};renderActivity();closeProfile();document.body.classList.add('auth-locked');if(!$('#locked').open)$('#locked').showModal();show($('#account'),false);show($('#content'));syncFx('');status('Login untuk mengakses katalog premium.')}
+function showLocked(){stopStatusPoll();if($('#advanced-status').open)$('#advanced-status').close();if($('#repo-modal').open)$('#repo-modal').close();resetGithub();savedRepos=[];$('#saved-repos').replaceChildren();closeCheck();resetLocalSkills();resetLocalMcp();csrf='';lastStatus=null;selectedSkills.clear();activity.length=0;catalog={skills:[],mcpServers:[]};renderActivity();closeProfile();closeNotif();if($('#profile-dialog').open)$('#profile-dialog').close();document.body.classList.add('auth-locked');if(!$('#locked').open)$('#locked').showModal();show($('#account'),false);show($('#content'));syncFx('');status('Login untuk mengakses katalog premium.')}
 $('#locked').addEventListener('cancel',e=>e.preventDefault());
 document.body.classList.add('auth-locked');$('#locked').showModal();
 $('#login').onclick=()=>busy($('#login'),'Membuka login…',async()=>{const{url}=await post('/api/auth/login');location.href=url});
@@ -647,10 +1112,18 @@ advanced.addEventListener('close',()=>{if(!$('#locked').open)advancedTrigger?.fo
 $$('.copy-btn').forEach(btn=>btn.onclick=async()=>{try{await navigator.clipboard.writeText(btn.dataset.copy);const old=btn.textContent;btn.textContent='Tersalin';setTimeout(()=>btn.textContent=old,1400)}catch{status('Gagal menyalin. Pilih teks lalu salin manual.',true)}});
 
 // ─ Repositories ─
+// One tile for every repo: GitHub mark, owner/repo, one meta line, small actions.
+const GH_MARK='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>';
+function repoTile(title,url,meta,tag){const card=el('article','catalog-card repo-tile'),ic=el('span','repo-ic'),main=el('div','repo-main'),head=el('span','repo-head'),actions=el('div','repo-actions');ic.innerHTML=GH_MARK;
+  head.append(el('strong',null,title));if(tag)head.append(el('span','lib-type',tag));main.append(head,el('small','repo-meta',meta));main.title=url;
+  const open=el('a','repo-act repo-open');open.innerHTML=REPO_IC.open;open.title='Buka di GitHub';open.href=url;open.target='_blank';open.rel='noopener noreferrer';open.dataset.external='';open.setAttribute('aria-label','Buka '+title+' di GitHub');
+  actions.append(open);card.append(ic,main,actions);return {card,actions}}
+// Small icon actions; the copy button says "Tersalin" for a moment after a copy.
+const REPO_IC={copy:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg><span class="sr-only">Salin</span>',open:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',del:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg><span class="sr-only">Hapus</span>'};
+function repoCopy(url,label,cls='repo-copy'){const b=el('button','repo-act '+cls);b.innerHTML=REPO_IC.copy;b.type='button';b.title='Salin URL';b.setAttribute('aria-label','Salin URL '+label);b.onclick=async()=>{try{await navigator.clipboard.writeText(url);b.textContent='Tersalin';b.classList.add('copied');setTimeout(()=>{b.innerHTML=REPO_IC.copy;b.classList.remove('copied')},1400)}catch{status('Gagal menyalin. Pilih teks lalu salin manual.',true)}};return b}
 function renderSources(){const repos=[['MONOREPO-SKILLS','monorepo'],['GOOGLE-APPSCRIPT-SKILLS','appscript'],['SANTRI-SKILLS',null]];
- $('#repo-sources').replaceChildren(...repos.map(([name,source])=>{const card=document.createElement('article');card.className='catalog-card';const url='https://github.com/askiya/'+name,count=source?catalog.skills.filter(s=>s.source===source).length:null;
- card.innerHTML=`<span class="pill">BAWAAN</span><strong>askiya/${esc(name)}</strong><small>${esc(url)}</small><small>${count===null?'Repository SantriHub · penghubung katalog':count+' Skills dalam katalog aktif'} · MCP belum diperiksa</small>`;
- const copy=document.createElement('button');copy.type='button';copy.className='secondary repo-copy';copy.textContent='Salin URL';copy.onclick=async()=>{try{await navigator.clipboard.writeText(url);copy.textContent='Tersalin';setTimeout(()=>copy.textContent='Salin URL',1400)}catch(e){fail(e)}};card.append(copy);return card}));}
+ $('#repo-sources').replaceChildren(...repos.map(([name,source])=>{const url='https://github.com/askiya/'+name,count=source?catalog.skills.filter(s=>s.source===source).length:null;
+  const {card,actions}=repoTile('askiya/'+name,url,count===null?'Penghubung katalog SantriHub':count+' skill di katalog');actions.prepend(repoCopy(url,'askiya/'+name));return card}));}
 
 
 
@@ -658,10 +1131,10 @@ function renderSources(){const repos=[['MONOREPO-SKILLS','monorepo'],['GOOGLE-AP
 let repoPreview=null,savedRepos=[],repoGeneration=0,repoBusy=false;
 const repoModal=$('#repo-modal');
 function resetGithub(){repoGeneration++;repoPreview=null;$('#repo-modal-save').disabled=repoBusy;show($('#repo-modal-preview'),false);$('#repo-modal-feedback').textContent='Tempel URL, lalu Simpan. Deteksi dilakukan otomatis.'}
-function renderRepos(){const host=$('#saved-repos');if(!savedRepos.length){host.replaceChildren(emptyState('Belum ada repositori tersimpan. Simpan repo favorit supaya cepat dipakai lagi.','+ Tambah repositori',()=>$('#add-repo').click()));return}
- host.replaceChildren(...savedRepos.map(row=>{const card=document.createElement('article');card.className='catalog-card';card.innerHTML=`<strong>${esc(row.repo)}</strong><small>${esc(row.url)}</small><small>Terdeteksi: Skills ${row.skills.length} · MCP ${row.mcp.length}. Bukan bukti terpasang.</small>`;
- const actions=document.createElement('div');actions.className='repo-actions';const copy=document.createElement('button');copy.type='button';copy.className='copy-btn secondary';copy.textContent='Salin';copy.setAttribute('aria-label','Salin URL '+row.repo);copy.onclick=async()=>{try{await navigator.clipboard.writeText(row.url);copy.textContent='Tersalin';setTimeout(()=>copy.textContent='Salin',1400)}catch{status('Gagal menyalin. Pilih teks lalu salin manual.',true)}};
- const del=document.createElement('button');del.type='button';del.className='secondary repo-delete';del.textContent='Hapus';del.onclick=()=>busy(del,'Menghapus bookmark…',async()=>{await post('/api/repos/delete',{url:row.url});savedRepos=savedRepos.filter(x=>x.url!==row.url);renderRepos();done('Bookmark dihapus.')});actions.append(copy,del);card.append(actions);return card}))}
+function renderRepos(){const host=$('#saved-repos');$('#repo-count').textContent=savedRepos.length||'';if(!savedRepos.length){host.replaceChildren(emptyState('Belum ada repo tersimpan.','+ Tambah repositori',()=>$('#add-repo').click()));return}
+ host.replaceChildren(...savedRepos.map(row=>{const {card,actions}=repoTile(row.repo,row.url,`Skills ${row.skills.length} · MCP ${row.mcp.length}`);card.querySelector('.repo-meta').title='Terdeteksi saat disimpan. Bukan bukti terpasang.';
+ const copy=repoCopy(row.url,row.repo,'copy-btn');
+ const del=el('button','repo-act repo-delete');del.innerHTML=REPO_IC.del;del.title='Hapus bookmark';del.type='button';del.setAttribute('aria-label','Hapus bookmark '+row.repo);del.onclick=()=>busy(del,'Menghapus bookmark…',async()=>{await post('/api/repos/delete',{url:row.url});savedRepos=savedRepos.filter(x=>x.url!==row.url);renderRepos();done('Bookmark dihapus.')});actions.prepend(copy);actions.append(del);return card}))}
 async function loadRepos(){try{savedRepos=await getJson('/api/repos');renderRepos()}catch(e){fail(e)}}
 function closeRepoModal(){if(!repoModal.open||repoModal.classList.contains('dialog-closing'))return;if(matchMedia('(prefers-reduced-motion: reduce)').matches){repoModal.close();return}repoModal.classList.add('dialog-closing');setTimeout(()=>{repoModal.classList.remove('dialog-closing');if(repoModal.open)repoModal.close()},400)}
 $('#add-repo').onclick=()=>{resetGithub();$('#repo-modal-url').value='';repoModal.showModal();$('#repo-modal-url').focus()};$('#repo-modal-close').onclick=closeRepoModal;
@@ -749,8 +1222,16 @@ $('#force-antigravity').onclick=()=>{if(checkBusy||$('#force-antigravity').hidde
 $('#force-confirm').addEventListener('close',()=>{if($('#force-confirm').returnValue==='confirm')restartIde(true)});
 
 // ─ Activity ─
-function renderActivity(){$('#activity-log').innerHTML=activity.length?activity.map(a=>`<li class="${a.err?'error':''}"><time>${a.at.toLocaleTimeString()}</time> ${esc(a.t)}</li>`).join(''):'<li class="empty-state">Belum ada aktivitas di sesi ini.</li>'}
-$('#clear-activity').onclick=()=>{activity.length=0;renderActivity()};
+var actFilter='all'; // var: log() may render before this line runs
+function renderActivity(){const host=$('#activity-log'),bad=activity.filter(a=>a.err).length;
+  $('#act-n-all').textContent=activity.length;$('#act-n-ok').textContent=activity.length-bad;$('#act-n-err').textContent=bad;$('#clear-activity').disabled=!activity.length;
+  const f=actFilter||'all',rows=activity.filter(a=>f==='all'||(f==='err')===a.err);
+  if(!rows.length){const e=el('li','act-empty');e.append(el('span','act-empty-ic','↺'),el('strong',null,activity.length?'Tidak ada yang cocok':'Belum ada aktivitas'),el('small',null,activity.length?'Coba saring yang lain.':'Impor, aktifkan, dan tes akan tercatat di sini.'));
+    if(!activity.length){const b=el('button','secondary','+ Tambah skill');b.type='button';b.onclick=()=>go('add');e.append(b)}host.replaceChildren(e);return}
+  host.replaceChildren(...rows.map(a=>{const li=el('li','act-row'+(a.err?' err':'')),time=el('time',null,a.at.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}));time.dateTime=a.at.toISOString();time.title=a.at.toLocaleString('id-ID');
+    li.append(el('span','act-ic',a.err?'!':'✓'),el('span','act-text',a.t.replace(/^✓\s*/,'')),time);return li}))}
+$$('[data-act]').forEach(b=>b.onclick=()=>{actFilter=b.dataset.act;$$('[data-act]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));renderActivity()});
+$('#clear-activity').onclick=()=>{activity.length=0;renderActivity();refreshBell()};
 
 
 // ─ Antigravity effect: Canvas 2D adaptation, runs only while Home is visible ─

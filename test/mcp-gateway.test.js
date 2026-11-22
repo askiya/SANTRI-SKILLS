@@ -64,51 +64,90 @@ test('gateway file: only well-formed entries are used', () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('gateway: tools of all servers under one MCP, calls routed back, broken servers left out', async () => {
+
+const call = (id, name, args) => ({ id, method: 'tools/call', params: { name, arguments: args } });
+const textOf = (reply) => reply.result.content[0].text;
+const HUB_TOOLS = ['hub_cari', 'hub_skill', 'hub_docs', 'hub_status', 'hub_mulai_proyek', 'hub_referensi', 'hub_alat', 'hub_pakai'];
+
+test('hub: a short tool list; other MCP servers are found with hub_alat and run with hub_pakai', async () => {
   const { dir, file } = setup((fake) => ({
     alpha: { command: process.execPath, args: [fake, 'alpha'] },
     beta: { command: process.execPath, args: [fake, 'beta'] },
     broken: { command: path.join(path.dirname(fake), 'does-not-exist.exe'), args: [] },
+    'santri-skills': { command: process.execPath, args: [fake, 'self'] },
   }));
   try {
     const { byId, stderr } = await talk(file, [
-      { id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } },
+      { id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', clientInfo: { name: 'claude-code' } } },
       { method: 'notifications/initialized' },
       { id: 2, method: 'tools/list' },
-      { id: 3, method: 'tools/call', params: { name: 'beta__echo', arguments: { x: 1 } } },
-      { id: 4, method: 'tools/call', params: { name: 'nope__echo' } },
-      { id: 5, method: 'ping' },
+      call(3, 'hub_alat', {}),
+      call(4, 'hub_alat', { query: 'echo back' }),
+      call(5, 'hub_pakai', { server: 'beta', tool: 'echo', arguments: { x: 1 } }),
+      call(6, 'hub_pakai', { server: 'beta', tool: 'nope' }),
+      call(7, 'hub_pakai', { server: 'santri-skills', tool: 'echo' }),
+      { id: 8, method: 'tools/call', params: { name: 'beta__echo' } },
+      { id: 9, method: 'prompts/list' },
+      { id: 10, method: 'ping' },
     ]);
-    assert.equal(byId(1).result.protocolVersion, '2025-03-26');
-    assert.equal(byId(1).result.serverInfo.name, 'santrihub-gateway');
+    const init = byId(1).result;
+    assert.equal(init.protocolVersion, '2025-03-26');
+    assert.match(init.instructions, /hub_cari/);
+    assert.ok(init.capabilities.prompts);
     const names = byId(2).result.tools.map((t) => t.name);
-    assert.ok(names.includes('alpha__echo') && names.includes('beta__echo'));
-    assert.ok(!names.some((n) => n.startsWith('broken')), 'a server that cannot start is left out');
-    for (const n of names) assert.match(n, /^[A-Za-z0-9_-]{1,64}$/, 'names valid for every agent');
-    assert.equal(byId(2).result.tools.find((t) => t.name === 'alpha__echo').description, '[alpha] Echo back');
-    assert.deepEqual(byId(3).result.content[0].text, 'beta:{"x":1}');
-    assert.equal(byId(4).error.code, -32602);
-    assert.deepEqual(byId(5).result, {});
+    assert.deepEqual(names.sort(), [...HUB_TOOLS].sort(), 'other servers are not listed one tool at a time');
+    for (const n of names) assert.match(n, /^[A-Za-z0-9_-]{1,64}$/);
+    assert.match(textOf(byId(3)), /alpha: 2 tool/);
+    assert.match(textOf(byId(3)), /broken: gagal dijalankan/);
+    assert.doesNotMatch(textOf(byId(3)), /santri-skills|self/, 'santri-skills behind the hub would only repeat the hub');
+    assert.match(textOf(byId(4)), /server: (alpha|beta) · tool: echo/);
+    assert.match(textOf(byId(4)), /arguments: \{"type":"object"\}/);
+    assert.equal(textOf(byId(5)), 'beta:{"x":1}', 'the other server answers as it is');
+    assert.equal(byId(6).result.isError, true);
+    assert.match(textOf(byId(6)), /Tool 'nope' tidak ada/);
+    assert.equal(byId(7).result.isError, true);
+    assert.equal(byId(8).error.code, -32602, 'old prefixed names are gone');
+    assert.deepEqual(byId(9).result.prompts.map((p) => p.name), ['mulai', 'bangun']);
+    assert.deepEqual(byId(10).result, {});
     assert.match(stderr, /broken/);
+
+    const cache = JSON.parse(fs.readFileSync(path.join(dir, 'tool-cache.json'), 'utf8')).servers;
+    assert.deepEqual(Object.keys(cache).sort(), ['alpha', 'beta']);
+    const activity = fs.readFileSync(path.join(dir, 'activity.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.deepEqual(activity.map((a) => a.tool).sort(), ['hub_alat', 'hub_alat', 'hub_pakai']);
+    const used = activity.find((a) => a.tool === 'hub_pakai');
+    assert.equal(used.detail, 'beta/echo');
+    assert.equal(used.client, 'claude-code');
+    assert.doesNotMatch(JSON.stringify(activity), /"x"/, 'arguments are never logged');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('gateway: long tool names are shortened and still reach the right tool', async () => {
+test('hub: known tools come from the cache, so a search does not start the server again', async () => {
   const { dir, file } = setup((fake) => ({ alpha: { command: process.execPath, args: [fake, 'alpha'] } }));
   try {
-    const first = await talk(file, [{ id: 1, method: 'initialize', params: {} }, { id: 2, method: 'tools/list' }]);
-    const long = first.byId(2).result.tools.find((t) => t.name !== 'alpha__echo').name;
-    assert.ok(long.length <= 64);
-    const second = await talk(file, [{ id: 1, method: 'initialize', params: {} }, { id: 2, method: 'tools/call', params: { name: long } }]);
-    assert.match(second.byId(2).result.content[0].text, /unknown a\.very\.long\.tool\.name/, 'routed with the original name');
-    assert.equal(second.byId(2).result.isError, true);
+    await talk(file, [{ id: 1, method: 'initialize', params: {} }, call(2, 'hub_alat', {})]);
+    fs.rmSync(path.join(dir, 'fake.js')); // the server can no longer start
+    const { byId } = await talk(file, [{ id: 1, method: 'initialize', params: {} }, call(2, 'hub_alat', { query: 'echo' })]);
+    assert.match(textOf(byId(2)), /server: alpha · tool: echo/);
+    assert.doesNotMatch(textOf(byId(2)), /gagal/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('gateway with nothing configured answers with no tools', async () => {
+test('hub: long tool names are run with their original name', async () => {
+  const { dir, file } = setup((fake) => ({ alpha: { command: process.execPath, args: [fake, 'alpha'] } }));
+  try {
+    const { byId } = await talk(file, [{ id: 1, method: 'initialize', params: {} },
+      call(2, 'hub_pakai', { server: 'alpha', tool: 'a.very.long.tool.name.that.goes.on.and.on.and.on.forever' })]);
+    assert.match(textOf(byId(2)), /unknown a\.very\.long\.tool\.name/, 'routed with the original name');
+    assert.equal(byId(2).result.isError, true);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('hub with no other MCP servers still offers the hub tools', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'santri-gw-empty-'));
   try {
-    const { byId } = await talk(path.join(dir, 'none.json'), [{ id: 1, method: 'initialize', params: {} }, { id: 2, method: 'tools/list' }]);
-    assert.deepEqual(byId(2).result.tools, []);
+    const { byId } = await talk(path.join(dir, 'none.json'), [{ id: 1, method: 'initialize', params: {} }, { id: 2, method: 'tools/list' }, call(3, 'hub_alat', { query: 'x' })]);
+    assert.equal(byId(2).result.tools.length, HUB_TOOLS.length);
+    assert.match(textOf(byId(3)), /Belum ada MCP lain/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

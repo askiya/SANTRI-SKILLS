@@ -59,6 +59,11 @@ function replaceCache(staging, dir, validate = () => {}) {
   return dir;
 }
 
+// A cached repo older than this is fetched again in the background, so new skills and the
+// design catalog reach members without a manual `update`. The current read never waits for it.
+const MAX_AGE_MS = Number(process.env.SANTRI_SKILLS_CACHE_MAX_AGE_MS) || 24 * 60 * 60 * 1000;
+const refreshing = new Map();
+
 // Download repo tarball from GitHub and extract with the stdlib tar.gz reader.
 // Extraction happens in a staging dir: the existing cache stays usable if anything fails.
 // ponytail: no checksum pinning; branch tip is trusted. Add pinned commit SHA in registry when releases matter.
@@ -66,7 +71,13 @@ async function fetchSource(rawSource, { refresh = false } = {}) {
   const source = validateSource(rawSource);
   const dir = path.join(CACHE_ROOT, source.id);
   const marker = path.join(dir, '.fetched');
-  if (!refresh && fs.existsSync(marker)) return dir;
+  if (!refresh && fs.existsSync(marker)) {
+    if (Date.now() - fs.statSync(marker).mtimeMs > MAX_AGE_MS && !refreshing.has(source.id)) {
+      // Offline or a failed download keeps the old copy; the next read tries again.
+      refreshing.set(source.id, fetchSource(source, { refresh: true }).catch(() => {}).finally(() => refreshing.delete(source.id)));
+    }
+    return dir;
+  }
 
   const url = `https://codeload.github.com/${source.repo}/tar.gz/refs/heads/${source.branch}`;
   const buf = await download(url);

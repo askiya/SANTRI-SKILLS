@@ -1,21 +1,22 @@
 'use strict';
 
 // Minimal MCP stdio server (JSON-RPC 2.0, protocol negotiated from SUPPORTED_PROTOCOLS).
-// Tools: santrihub_status, santrihub_verify, list_skills, get_skill, get_skill_file, search_docs. No dashboard heartbeat or fake connection marker.
+// Tools: the hub (hub_cari, hub_skill, hub_docs, hub_status; src/hub.js) plus santrihub_status, santrihub_verify,
+// list_skills, get_skill, get_skill_file, search_docs. No dashboard heartbeat or fake connection marker.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
 const { loadCatalog, selectSources, CACHE_ROOT } = require('./sources');
+const { createHub, readSkillFile } = require('./hub');
 
 // Newest first. Tools-only server: initialize/tools/list/tools/call are the same in these revisions.
 const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 let protocol = SUPPORTED_PROTOCOLS[0];
-const MAX_SKILL_FILE_BYTES = 512 * 1024;
 const pkg = require('../package.json');
 const {report,verify}=require('./verification-bridge');
 
-const TOOLS = [
+const LEGACY_TOOLS = [
   {
     name: 'santrihub_status',
     description: 'Bukti read-only bahwa runtime MCP santri-skills ini benar-benar dimuat klien: identitas server, versi, protocol, executable Node, dan root instalasi. Tidak membaca config atau secret.',
@@ -36,7 +37,7 @@ const TOOLS = [
   },
   {
     name: 'list_skills',
-    description: 'Daftar semua skill Santriverse (Apps Script + Monorepo) beserta deskripsinya.',
+    description: 'Daftar semua skill paket Santriverse (Apps Script + Monorepo). Untuk tugas tertentu lebih baik hub_cari.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -84,42 +85,15 @@ function catalog() {
   return catalogPromise;
 }
 
+const hub = createHub({ catalog, server: 'santri-skills', version: pkg.version });
+const TOOLS = [...hub.tools, ...LEGACY_TOOLS];
+
 function findSkill(groups, id) {
   for (const g of groups) {
     const hit = g.skills.find((s) => s.id === id);
     if (hit) return hit;
   }
   throw new Error(`Skill '${id}' tidak ditemukan. Panggil list_skills dulu.`);
-}
-
-function* walkFiles(dir, root = dir) {
-  for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, d.name);
-    if (d.isDirectory()) yield* walkFiles(p, root);
-    else if (d.isFile() && d.name !== '.santri-skills.json') yield path.relative(root, p).split(path.sep).join('/');
-  }
-}
-
-// Read-only and inside the skill folder only: no absolute path, no '..', no symlink, text up to 512 KB.
-function readSkillFile(skill, rel) {
-  if (rel === undefined || rel === '') {
-    const files = [...walkFiles(skill.dir)].sort();
-    return `${files.length} file di skill ${skill.id}:\n${files.map((f) => `- ${f}`).join('\n')}`;
-  }
-  if (typeof rel !== 'string' || path.isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.split(/[\\/]/).includes('..') || /[\x00-\x1f]/.test(rel)) {
-    throw new Error('path harus relatif di dalam folder skill.');
-  }
-  const root = path.resolve(skill.dir);
-  const file = path.resolve(root, rel);
-  if (!file.startsWith(root + path.sep)) throw new Error('path keluar dari folder skill.');
-  for (let cur = file; cur !== root; cur = path.dirname(cur)) {
-    if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) throw new Error('Symlink ditolak.');
-  }
-  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error(`File '${rel}' tidak ada di skill ${skill.id}. Panggil get_skill_file tanpa path untuk daftar file.`);
-  if (fs.statSync(file).size > MAX_SKILL_FILE_BYTES) throw new Error('File melebihi 512 KB.');
-  const data = fs.readFileSync(file);
-  if (data.includes(0)) throw new Error('File biner tidak dikirim lewat MCP.');
-  return data.toString('utf8');
 }
 
 function* walkMarkdown(dir) {
@@ -132,6 +106,7 @@ function* walkMarkdown(dir) {
 }
 
 async function callTool(name, args = {}) {
+  if (hub.has(name)) return hub.call(name, args);
   if (name === 'santrihub_status') {
     report('tool');
     // Identity + install location only. No config values, env, tokens or file contents.
@@ -153,7 +128,7 @@ async function callTool(name, args = {}) {
     const rows = groups.flatMap((g) => g.skills.map((s) => `- [${s.source}] ${s.id}: ${s.description.slice(0, 180)}`));
     return `Total ${rows.length} skill:\n${rows.join('\n')}`;
   }
-  if (name === 'get_skill') return fs.readFileSync(path.join(findSkill(groups, args.id).dir, 'SKILL.md'), 'utf8');
+  if (name === 'get_skill') { const text = fs.readFileSync(path.join(findSkill(groups, args.id).dir, 'SKILL.md'), 'utf8'); hub.log(name, args.id); return text; }
   if (name === 'get_skill_file') return readSkillFile(findSkill(groups, args.id), args.path);
   if (name === 'search_docs') {
     const q = String(args.query || '').toLowerCase();
@@ -206,10 +181,12 @@ function serve() {
         report('initialize');
         const requested = params && params.protocolVersion;
         protocol = SUPPORTED_PROTOCOLS.includes(requested) ? requested : SUPPORTED_PROTOCOLS[0];
+        hub.setClient(params && params.clientInfo);
         reply(id, {
           protocolVersion: protocol,
-          capabilities: { tools: {} },
+          capabilities: { tools: {}, prompts: {} },
           serverInfo: { name: 'santri-skills', version: pkg.version },
+          instructions: hub.instructions,
         });
       } else if (method === 'tools/list') {
         reply(id, { tools: TOOLS });
@@ -222,6 +199,10 @@ function serve() {
         } catch (err) {
           reply(id, { content: [{ type: 'text', text: err.message }], isError: true });
         }
+      } else if (method === 'prompts/list') {
+        reply(id, { prompts: hub.prompts });
+      } else if (method === 'prompts/get') {
+        try { reply(id, hub.getPrompt(params && params.name, params && params.arguments)); } catch (err) { replyError(id, err.message, err.code || -32000); }
       } else if (method === 'ping') {
         reply(id, {});
       } else {

@@ -193,3 +193,30 @@ test('dashboard catalog exposes registry mcp entries and installs them by id (au
     await Promise.all([new Promise((r) => server.close(r)), new Promise((r) => remote.close(r))]);
   }
 });
+
+test('a stale cache answers at once and is fetched again in the background; offline keeps it', async () => {
+  const sources = require('../src/sources');
+  const source = { id: 'stale', repo: 'a/b', branch: 'main', skillsDir: 'skills' };
+  const live = path.join(sources.CACHE_ROOT, 'stale'), marker = path.join(live, '.fetched');
+  fs.mkdirSync(live, { recursive: true });
+  fs.writeFileSync(path.join(live, 'old'), 'kept');
+  fs.writeFileSync(marker, 'x');
+  const realFetch = globalThis.fetch;
+  let calls = 0, release;
+  const gate = new Promise((r) => { release = r; });
+  globalThis.fetch = async () => { calls++; await gate; throw new Error('offline'); };
+  try {
+    assert.equal(await sources.fetchSource(source), live, 'fresh cache: no download');
+    assert.equal(calls, 0);
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    fs.utimesSync(marker, old, old);
+    assert.equal(await sources.fetchSource(source), live, 'stale cache is still returned right away');
+    assert.equal(await sources.fetchSource(source), live);
+    assert.equal(calls, 1, 'one background download at a time');
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(fs.readFileSync(path.join(live, 'old'), 'utf8'), 'kept', 'offline keeps the old copy');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

@@ -1,21 +1,24 @@
 'use strict';
-// SantriHub MCP Gateway (stdio): one MCP entry ("santrihub") in every AI agent, behind it
-// the MCP servers the member switched on in SantriHub (~/.santrihub/gateway.json).
-// Changing that list needs no edit of any agent config, only a reload of the agent.
+// SantriHub MCP Hub (stdio, the "santrihub" entry in every AI agent). It answers with the hub
+// tools (hub_cari, hub_skill, hub_docs, hub_status; src/hub.js) over all skills, and keeps the
+// MCP servers the member switched on in SantriHub (~/.santrihub/gateway.json) behind two tools:
+// hub_alat finds a tool, hub_pakai runs it. The agent's tool list stays short however many
+// servers there are, and a server only starts when it is needed.
 //
 //   santriverse-skills mcp-gateway
 //
-// Tools of server `x` are offered as `x__<tool>`; calls are routed back to `x` with the
-// original name. Servers start on the first tools request; one that fails to start is
-// left out (reason on stderr) instead of breaking the others. Tools only: resources and
-// prompts of the servers behind the gateway are not forwarded.
+// Changing the server list needs no edit of any agent config, only a reload of the agent.
+// Tools only: resources and prompts of the servers behind the hub are not forwarded.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
+const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { SUPPORTED_PROTOCOLS } = require('./mcp-server');
 const { resolveCommand } = require('./runtime-status');
+const { loadCatalog } = require('./sources');
+const { createHub, rank, readToolCache, writeToolCache, hubHome } = require('./hub');
 const pkg = require('../package.json');
 
 const SEP = '__';
@@ -113,49 +116,126 @@ class Child {
   stop() { try { this.proc && this.proc.kill(); } catch { /* gone */ } }
 }
 
-/** Starts every configured server once; keeps the ones that came up. */
+// santri-skills (or the hub itself) behind the hub would only repeat the hub's own tools.
+const SELF = new Set(['santri-skills', 'santrihub']);
+const sig = (entry) => crypto.createHash('sha256').update(JSON.stringify([entry.command, entry.args])).digest('hex').slice(0, 16);
+const MAX_SCHEMA_CHARS = 1500;
+
+const GATEWAY_TOOLS = [
+  {
+    name: 'hub_alat',
+    description: 'Cari alat (tool) dari MCP lain yang terhubung ke SantriHub: database, GitHub, deploy, dan lainnya. Hasilnya nama server, nama tool dan skema argumennya; jalankan dengan hub_pakai. Tanpa query: daftar MCP beserta tool-nya.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'apa yang mau dilakukan, contoh: "buat tabel di database"' },
+        server: { type: 'string', description: 'batasi ke satu MCP (opsional)' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'hub_pakai',
+    description: 'Jalankan satu tool dari MCP lain lewat SantriHub. Pakai nama server dan tool persis seperti hasil hub_alat; arguments mengikuti skemanya.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        server: { type: 'string', description: 'nama MCP dari hub_alat' },
+        tool: { type: 'string', description: 'nama tool dari hub_alat' },
+        arguments: { type: 'object', description: 'argumen tool sesuai skema dari hub_alat' },
+      },
+      required: ['server', 'tool'],
+      additionalProperties: false,
+    },
+  },
+];
+
+/**
+ * The MCP servers behind the hub. Nothing starts until a tool search needs a server it has never
+ * seen or a call needs it; the tools a server offers are cached on disk (tool-cache.json) so later
+ * searches do not start it again.
+ */
 function createGateway(servers, opts = {}) {
-  const log = opts.log || ((line) => process.stderr.write(`[santrihub-gateway] ${line}\n`));
-  const children = new Map();
+  const env = opts.env || process.env;
+  const log = opts.log || ((line) => process.stderr.write(`[santrihub] ${line}\n`));
+  const dir = opts.dir || hubHome(env);
+  const entries = Object.fromEntries(Object.entries(servers).filter(([name]) => !SELF.has(name)));
+  const children = new Map(); // name → Promise<Child>
   const failures = {};
-  let ready = null;
-  const start = () => (ready ||= Promise.all(Object.entries(servers).map(async ([name, entry]) => {
-    const child = new Child(name, entry, { env: opts.env || process.env, log });
-    try { children.set(name, await child.init()); } catch (e) { failures[name] = e.message; log(e.message); child.stop(); }
-  })));
 
-  // Exposed name → { child, tool }. Agents such as Claude allow [A-Za-z0-9_-]{1,64}, so long or
-  // odd names are shortened/cleaned and made unique; the table, not the name, routes the call.
-  const routes = new Map();
-  async function listTools() {
-    await start();
-    routes.clear();
-    const tools = [];
-    for (const [name, child] of children) {
-      for (const t of child.tools) {
-        let exposed = `${name}${SEP}${t.name}`.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
-        for (let n = 2; routes.has(exposed); n++) exposed = `${exposed.slice(0, 60)}_${n}`;
-        routes.set(exposed, { child, tool: t.name });
-        tools.push({ ...t, name: exposed, description: `[${name}] ${t.description || ''}`.trim() });
-      }
+  function ensure(name) {
+    if (!children.has(name)) {
+      const child = new Child(name, entries[name], { env, log });
+      children.set(name, child.init().then((c) => {
+        delete failures[name];
+        const cache = readToolCache(dir);
+        cache[name] = { sig: sig(entries[name]), at: new Date().toISOString(),
+          tools: c.tools.map((t) => ({ name: t.name, description: String(t.description || '').slice(0, 1000), inputSchema: t.inputSchema || { type: 'object' } })) };
+        try { writeToolCache(dir, cache); } catch (e) { log(`tool-cache: ${e.message}`); }
+        return c;
+      }, (e) => {
+        failures[name] = e.message;
+        log(e.message);
+        child.stop();
+        children.delete(name); // a later call may try again
+        throw e;
+      }));
     }
-    return tools;
+    return children.get(name);
   }
 
-  async function callTool(exposed, args) {
-    if (!routes.size) await listTools();
-    const route = routes.get(exposed);
-    if (!route) throw Object.assign(new Error(`Tool tidak dikenal: ${exposed}`), { code: -32602 });
-    return route.child.request('tools/call', { name: route.tool, arguments: args || {} }, CALL_TIMEOUT_MS);
+  /** { name: { tools, cached } } for the configured servers, from the cache only. */
+  function known() {
+    const cache = readToolCache(dir);
+    return Object.fromEntries(Object.keys(entries).map((name) => {
+      const hit = cache[name] && cache[name].sig === sig(entries[name]) && Array.isArray(cache[name].tools);
+      return [name, { tools: hit ? cache[name].tools : [], cached: Boolean(hit) }];
+    }));
   }
 
-  const stop = () => { for (const c of children.values()) c.stop(); };
-  return { listTools, callTool, stop, failures, start };
+  async function findTools({ query, server } = {}) {
+    if (server && !entries[server]) throw new Error(`MCP '${server}' tidak ada di SantriHub. Yang ada: ${Object.keys(entries).join(', ') || '(belum ada)'}.`);
+    const names = server ? [server] : Object.keys(entries);
+    if (!names.length) return 'Belum ada MCP lain di SantriHub. Tambahkan di aplikasi SantriHub → Koleksi, lalu nyalakan di panel Gateway.';
+    const before = known();
+    await Promise.all(names.filter((n) => !before[n].cached).map((n) => ensure(n).catch(() => {})));
+    const now = known();
+    const failed = names.filter((n) => failures[n]).map((n) => `- ${n}: gagal dijalankan (${failures[n]})`);
+    const tail = failed.length ? `\n\nMCP yang gagal:\n${failed.join('\n')}` : '';
+    if (!query || !String(query).trim()) {
+      const rows = names.map((n) => `- ${n}: ${now[n].tools.length} tool${now[n].tools.length ? ' — ' + now[n].tools.slice(0, 30).map((t) => t.name).join(', ') : ''}`);
+      return `MCP di SantriHub:\n${rows.join('\n')}${tail}\n\nCari dengan query untuk melihat skema argumen.`;
+    }
+    const tools = names.flatMap((n) => now[n].tools.map((t) => ({ id: `${n}/${t.name}`, name: `${n} ${t.name}`, description: t.description || '', paket: [], server: n, tool: t })));
+    const hits = rank(tools, query, { limit: 8 });
+    if (!hits.length) return `Tidak ada tool untuk '${query}'. Panggil hub_alat tanpa query untuk daftar lengkap.${tail}`;
+    const blocks = hits.map((h) => {
+      const schema = JSON.stringify(h.tool.inputSchema || { type: 'object' });
+      return `- server: ${h.server} · tool: ${h.tool.name}\n  ${h.description.slice(0, 300)}\n  arguments: ${schema.length > MAX_SCHEMA_CHARS ? schema.slice(0, MAX_SCHEMA_CHARS) + '…' : schema}`;
+    });
+    return `Tool yang cocok (jalankan dengan hub_pakai):\n${blocks.join('\n')}${tail}`;
+  }
+
+  async function callDownstream(name, tool, args) {
+    if (!entries[name]) throw new Error(`MCP '${name}' tidak ada di SantriHub. Cari dulu dengan hub_alat.`);
+    const child = await ensure(name);
+    if (!child.tools.some((t) => t.name === tool)) throw new Error(`Tool '${tool}' tidak ada di MCP ${name}. Cari dengan hub_alat.`);
+    return child.request('tools/call', { name: tool, arguments: args && typeof args === 'object' ? args : {} }, CALL_TIMEOUT_MS);
+  }
+
+  const stop = () => { for (const p of children.values()) p.then((c) => c.stop(), () => {}); };
+  return { findTools, callDownstream, known, ensure, stop, failures, entries };
 }
 
-function serve({ input = process.stdin, output = process.stdout, servers = readGateway(gatewayFile()) } = {}) {
-  const gw = createGateway(servers);
+function serve({ input = process.stdin, output = process.stdout, env = process.env, servers = readGateway(gatewayFile(os.homedir(), env)) } = {}) {
+  const gw = createGateway(servers, { env });
+  let catalogPromise;
+  // A failed load (offline) is not kept: the next call tries again.
+  const catalog = () => (catalogPromise ||= loadCatalog().catch((e) => { catalogPromise = null; throw e; }));
+  const hub = createHub({ catalog, env, server: 'santrihub', version: pkg.version, extraServers: gw.known });
+  const tools = [...hub.tools, ...GATEWAY_TOOLS];
   const send = (msg) => output.write(JSON.stringify({ jsonrpc: '2.0', ...msg }) + '\n');
+  const text = (t) => ({ content: [{ type: 'text', text: t }] });
   const rl = readline.createInterface({ input, terminal: false });
   rl.on('close', () => { gw.stop(); });
   rl.on('line', async (line) => {
@@ -168,18 +248,33 @@ function serve({ input = process.stdin, output = process.stdout, servers = readG
     try {
       if (method === 'initialize') {
         const requested = params && params.protocolVersion;
-        gw.start(); // warm up the servers while the agent finishes its handshake
+        hub.setClient(params && params.clientInfo);
         return send({ id, result: { protocolVersion: SUPPORTED_PROTOCOLS.includes(requested) ? requested : SUPPORTED_PROTOCOLS[0],
-          capabilities: { tools: {} }, serverInfo: { name: 'santrihub-gateway', version: pkg.version } } });
+          capabilities: { tools: {}, prompts: {} }, serverInfo: { name: 'santrihub-gateway', version: pkg.version },
+          instructions: `${hub.instructions} Alat dari MCP lain (database, GitHub, deploy …): cari dengan hub_alat, jalankan dengan hub_pakai.` } });
       }
       if (method === 'ping') return send({ id, result: {} });
-      if (method === 'tools/list') return send({ id, result: { tools: await gw.listTools() } });
+      if (method === 'tools/list') return send({ id, result: { tools } });
+      if (method === 'prompts/list') return send({ id, result: { prompts: hub.prompts } });
+      if (method === 'prompts/get') {
+        try { return send({ id, result: hub.getPrompt(params && params.name, params && params.arguments) }); } catch (e) { return send({ id, error: { code: e.code || -32000, message: e.message } }); }
+      }
       if (method === 'tools/call') {
+        const name = params && params.name, args = (params && params.arguments) || {};
+        if (!tools.some((t) => t.name === name)) return send({ id, error: { code: -32602, message: `Tool tidak dikenal: ${name}` } });
         try {
-          return send({ id, result: await gw.callTool(params && params.name, params && params.arguments) });
+          if (hub.has(name)) return send({ id, result: text(await hub.call(name, args)) });
+          if (name === 'hub_alat') {
+            const out = await gw.findTools(args);
+            hub.log(name, String(args.query || args.server || '').slice(0, 100));
+            return send({ id, result: text(out) });
+          }
+          // hub_pakai: the other server's result goes back as it is. Only names are logged, never arguments.
+          const result = await gw.callDownstream(String(args.server || ''), String(args.tool || ''), args.arguments);
+          hub.log(name, `${args.server}/${args.tool}`);
+          return send({ id, result });
         } catch (e) {
-          if (e.code === -32602) return send({ id, error: { code: -32602, message: e.message } });
-          return send({ id, result: { content: [{ type: 'text', text: e.message }], isError: true } });
+          return send({ id, result: { ...text(e.message), isError: true } });
         }
       }
       return send({ id, error: { code: -32601, message: `Method tidak didukung: ${method}` } });
@@ -190,4 +285,4 @@ function serve({ input = process.stdin, output = process.stdout, servers = readG
   return gw;
 }
 
-module.exports = { serve, createGateway, readGateway, setGatewayServer, gatewayFile, Child, SEP, NAME_RE };
+module.exports = { serve, createGateway, readGateway, setGatewayServer, gatewayFile, Child, SEP, NAME_RE, GATEWAY_TOOLS };

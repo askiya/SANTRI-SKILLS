@@ -66,6 +66,7 @@ const { detectTargets, validateCustomTargets, resolveTargets, resolveForWrite, f
 const { harnessDefs, findHarness, harnessStatus, setSkill, setMcp } = require('./harnesses');
 const library = require('./library');
 const gateway = require('./mcp-gateway');
+const hub = require('./hub');
 const profiles = require('./profiles');
 const mcpLibrary = require('./mcp-library');
 const { scanUploads } = require('./smart-import');
@@ -73,6 +74,8 @@ const { probeMcp } = require('./mcp-probe');
 const myPaket = require('./my-paket');
 // The SantriHub MCP Gateway as an MCP entry: this runtime with `mcp-gateway` instead of `mcp-serve`.
 const GATEWAY_ID = 'santrihub-gateway', GATEWAY_NAME = 'santrihub';
+// Skill that tells every agent to start with hub_cari; installed by 'Hubungkan' next to the santrihub MCP.
+const HUB_SKILL = { id: 'santrihub', dir: path.join(__dirname, 'santrihub-skill'), source: 'santrihub' };
 const gatewayEntry = () => { const e = ownServerEntry(); return { command: e.command, args: e.args.map((a) => (a === 'mcp-serve' ? 'mcp-gateway' : a)) }; };
 const { EXTENSIONS } = require('./extensions');
 const { createUpdateChecker } = require('./update');
@@ -138,6 +141,7 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
   const libRoot = library.libraryRoot(home || os.homedir());
   const libraryPreviews = new Map(); // in-memory GitHub scans awaiting the member's review (10 min)
   const gatewayPath = gateway.gatewayFile(home || os.homedir(), env);
+  const hubDir = path.dirname(gatewayPath); // activity.jsonl and tool-cache.json of the hub
   const profilesPath = profiles.profilesFile(home || os.homedir());
   const harnessStateFile = path.join(home || os.homedir(), '.santrihub', 'harness-mcp.json');
   const mcpLibPath = mcpLibrary.mcpLibraryFile(home || os.homedir());
@@ -338,6 +342,11 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         await session.requirePremium();
         return send(200, { skills: library.listLibrary(libRoot).map(({ dir, ...s }) => s) });
       }
+      // What the agents asked the SantriHub hub for (src/hub.js), newest first. Names and queries only.
+      if (req.method === 'GET' && req.url === '/api/activity') {
+        await session.requirePremium();
+        return send(200, { items: hub.readActivity(hubDir, 30) });
+      }
       // Which catalog MCP servers run behind the SantriHub MCP Gateway.
       if (req.method === 'GET' && req.url === '/api/gateway') {
         await session.requirePremium();
@@ -379,7 +388,7 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
       if (['/api/install', '/api/mcp', '/api/repo/install', '/api/repo/preview', '/api/targets/custom',
            '/api/local/skills/preview', '/api/local/skills/install',
            '/api/local/mcp/preview', '/api/local/mcp/install', '/api/github/preview', '/api/github/install', '/api/repos', '/api/repos/delete', '/api/website/preview', '/api/website/install', '/api/verify', '/api/antigravity/control',
-           '/api/harnesses/skill', '/api/harnesses/mcp', '/api/harnesses/bulk',
+           '/api/harnesses/skill', '/api/harnesses/mcp', '/api/harnesses/bulk', '/api/harnesses/connect',
            '/api/library/github/preview', '/api/library/github/save', '/api/library/markdown', '/api/library/delete', '/api/library/update',
            '/api/library/upload/preview', '/api/library/upload/save', '/api/mcp-library/delete', '/api/mcp/test',
            '/api/library/paket', '/api/mcp-library/paket', '/api/my-paket/save', '/api/my-paket/delete',
@@ -725,10 +734,11 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
         if (typeof input.id !== 'string') throw new AuthError(400, 'id wajib.');
         const m = await resolveMcp(input.id);
         const result = await probe(m.base, { env: input.id === GATEWAY_ID ? { ...env, SANTRIHUB_GATEWAY_FILE: gatewayPath } : env });
-        if (input.id === GATEWAY_ID && result.ok && !result.toolCount) {
-          result.hint = Object.keys(gateway.readGateway(gatewayPath)).length
-            ? 'Gateway jalan, tapi MCP di dalamnya belum menawarkan tool. Tes koneksi tiap MCP di Koleksi untuk melihat yang gagal.'
-            : 'Gateway masih kosong. Pilih MCP di panel Gateway pada langkah 3 · Aktifkan.';
+        if (input.id === GATEWAY_ID && result.ok) {
+          // The hub always offers its own tools; the MCP servers behind it start only when used.
+          result.hint = Object.keys(gateway.readGateway(gatewayPath)).some((n) => n !== 'santri-skills')
+            ? 'Hub jalan. MCP lain di dalamnya baru dinyalakan saat agent memakainya (hub_alat → hub_pakai).'
+            : 'Hub jalan: skill bisa dicari agent dengan hub_cari. Belum ada MCP lain di panel Gateway.';
         }
         return send(200, { id: input.id, name: m.name, ...result });
       }
@@ -786,6 +796,22 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
             ? setSkill(h, input.enable ? await resolveSkill(input.id) : { id: input.id }, input.enable)
             : await (async () => { const m = await resolveMcp(input.id); return setMcp(h, m.name, m.base, input.enable, { stateFile: harnessStateFile }); })();
           return send(200, { ...result, harness: h.id, hint: h.restartHint || `Reload ${h.name} agar perubahan terbaca.` });
+        } finally {
+          busy = false;
+        }
+      }
+      // Fase 3 · Hubungkan: one agent gets the santrihub MCP (the hub) and the santrihub skill that
+      // sends it to hub_cari first; every skill and MCP of SantriHub is then reachable through it.
+      if (req.url === '/api/harnesses/connect') {
+        if (typeof input.harness !== 'string' || typeof input.enable !== 'boolean') throw new AuthError(400, 'harness dan enable wajib.');
+        const h = findHarness(harnessDefs({ home: home || os.homedir(), env }), input.harness);
+        if (busy) return send(409, { error: 'Instalasi sedang berjalan' });
+        busy = true;
+        try {
+          clearVerification();
+          const mcp = setMcp(h, GATEWAY_NAME, gatewayEntry(), input.enable, { stateFile: harnessStateFile });
+          const skill = h.skillsDir ? setSkill(h, input.enable ? HUB_SKILL : { id: HUB_SKILL.id }, input.enable) : null;
+          return send(200, { connected: input.enable, harness: h.id, mcp, skill, hint: h.restartHint || `Reload ${h.name} agar perubahan terbaca.` });
         } finally {
           busy = false;
         }

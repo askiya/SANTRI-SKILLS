@@ -30,7 +30,7 @@ function serve(cache, lines) {
   const input = lines.map((m) => (typeof m === 'string' ? m : JSON.stringify({ jsonrpc: '2.0', ...m }))).join('\n') + '\n';
   const r = spawnSync(process.execPath, [CLI, 'mcp-serve'], {
     input, encoding: 'utf8', timeout: 15000,
-    env: { ...process.env, SANTRI_SKILLS_CACHE: cache, SANTRIHUB_BRIDGE_FILE: path.join(cache, 'bridge.json') },
+    env: { ...process.env, SANTRI_SKILLS_CACHE: cache, SANTRIHUB_BRIDGE_FILE: path.join(cache, 'bridge.json'), SANTRIHUB_HOME: path.join(cache, 'hub') },
   });
   const replies = r.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
   return { replies, byId: (id) => replies.find((x) => x.id === id) };
