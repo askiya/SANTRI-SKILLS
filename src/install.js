@@ -131,7 +131,9 @@ function mutateMcp(file, change) {
   let backup=null;
   try{
     const original=fs.existsSync(file)?fs.readFileSync(file):null;
-    let cfg={};try{if(original)cfg=JSON.parse(original.toString('utf8'))}catch{throw new Error(`${file} bukan JSON valid. File tidak diubah.`)}
+    // An empty (0 byte or whitespace-only) file is an empty config: Antigravity creates mcp_config.json empty.
+    const text=original?original.toString('utf8').replace(/^﻿/,'').trim():'';
+    let cfg={};try{if(text)cfg=JSON.parse(text)}catch{throw new Error(`${file} bukan JSON valid. File tidak diubah.`)}
     if(!cfg||typeof cfg!=='object'||Array.isArray(cfg))throw new Error('Root config harus object. File tidak diubah.');
     if(Object.hasOwn(cfg,'mcpServers')&&(!cfg.mcpServers||typeof cfg.mcpServers!=='object'||Array.isArray(cfg.mcpServers)))throw new Error('mcpServers harus object. File tidak diubah.');
     const before=JSON.stringify(cfg);change(cfg);

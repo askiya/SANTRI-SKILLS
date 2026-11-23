@@ -69,8 +69,8 @@ test('smart import: ZIPs, a folder, loose files and MCP configs become reviewabl
   assert.deepEqual(r.problems, []);
   const byId = Object.fromEntries(r.skills.map((s) => [s.id, s]));
   assert.deepEqual(Object.keys(byId).sort(), ['catatan', 'one', 'resep', 'two', 'ui-kit']);
-  assert.deepEqual(byId['ui-kit'].files.map((f) => f.rel), ['references/rules.md']);
-  assert.ok(byId['ui-kit'].skipped.includes('scripts/run.py') && byId['ui-kit'].skipped.includes('logo.png (bukan file teks)'));
+  assert.deepEqual(byId['ui-kit'].files.map((f) => f.rel), ['references/rules.md', 'logo.png']);
+  assert.ok(byId['ui-kit'].skipped.includes('scripts/run.py') && !byId['ui-kit'].skipped.some((x) => x.startsWith('logo.png')));
   assert.equal(byId['ui-kit'].generated, false);
   assert.equal(byId.catatan.generated, true);
   assert.match(byId.catatan.skillMd, /^---\nname: catatan\ndescription: "Panduan menulis caption jualan untuk Instagram dan WhatsApp\."/);

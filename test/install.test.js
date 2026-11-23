@@ -116,6 +116,13 @@ test('mcp config lists stdio and remote entries by kind without exposing secrets
   fs.rmSync(cwd, { recursive: true, force: true });
 });
 
+test('empty mcp_config.json (as Antigravity creates it) is treated as an empty config', () => {
+ const {addMcpServer,SERVER_NAME}=require('../src/install');const cwd=tmp();const file=path.join(cwd,'mcp_config.json');
+ try {for(const raw of ['','  \r\n','﻿']) {
+  fs.writeFileSync(file,raw);addMcpServer(file);
+  assert.ok(JSON.parse(fs.readFileSync(file,'utf8')).mcpServers[SERVER_NAME]);
+ }} finally {fs.rmSync(cwd,{recursive:true,force:true});}
+});
 test('invalid MCP object shapes never change config or backup', () => {
  const {addMcpServer}=require('../src/install');const cwd=tmp();const file=path.join(cwd,'mcp_config.json');
  try {for(const raw of ['[]','null','42','{"mcpServers":[]}','{"mcpServers":null}']) {

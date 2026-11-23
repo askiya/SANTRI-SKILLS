@@ -388,13 +388,13 @@ $('#lib-github-form').onsubmit=e=>{e.preventDefault();busy($('#lib-github-scan')
     if(s.generated)top.append(el('span','pill','SKILL.md DIBUAT OTOMATIS'));if(s.repaired)top.append(el('span','pill','FRONTMATTER DIPERBAIKI'));row.append(top);
     const id=el('label',null,'ID skill');const idIn=document.createElement('input');idIn.className='lib-pick-id';idIn.value=s.id;id.append(idIn);
     const desc=el('label',null,'Deskripsi (kapan agent memakainya)');const descIn=document.createElement('input');descIn.className='lib-pick-desc';descIn.value=s.description;desc.append(descIn);row.append(id,desc);
-    row.append(el('small','muted',`${s.files.length} file pendukung${s.skipped.length?` · ${s.skipped.length} dilewati`:''}`));
+    row.append(el('small','muted',`${s.files.length} file pendukung${s.skipped.length?` · ${s.skipped.length} dilewati`:''}`));if(s.note)row.append(el('p','note lib-note',s.note));
     if(s.skipped.length){const d=el('details');d.append(el('summary',null,'File yang dilewati'),el('pre',null,s.skipped.join('\n')));row.append(d)}
     const md=el('details');md.append(el('summary',null,'Lihat SKILL.md'),el('pre',null,s.skillMd));row.append(md);return row}));
   show($('#lib-github-actions'));done(`✓ ${libPreview.skills.length} skill ditemukan di ${libPreview.source.repo} (${libPreview.source.branch}).`)})};
 $('#lib-github-save').onclick=()=>busy($('#lib-github-save'),'Menyimpan ke library…',async()=>{if(!libPreview)throw new Error('Preview dulu.');
   const picks=$$('#lib-github-results .lib-pick').filter(r=>r.querySelector('.lib-pick-box').checked).map(r=>({key:r.dataset.key,id:r.querySelector('.lib-pick-id').value.trim(),description:r.querySelector('.lib-pick-desc').value.trim()}));
-  if(!picks.length)throw new Error('Pilih minimal satu skill.');const r=await post('/api/library/github/save',{previewId:libPreview.previewId,picks});closeLibPanels();done(`✓ ${r.saved.join(', ')} tersimpan di library.`);await loadLibrary()});
+  if(!picks.length)throw new Error('Pilih minimal satu skill.');const r=await post('/api/library/github/save',{previewId:libPreview.previewId,picks});closeLibPanels();done(`✓ ${r.saved.join(', ')} tersimpan di library.${r.repoSaved?' Link repo dicatat di Repositori.':''}`);await loadLibrary()});
 $('#lib-md-file').onchange=async()=>{const f=$('#lib-md-file').files[0];if(!f)return;try{$('#lib-md-content').value=await readFile(f);if(!$('#lib-md-id').value)$('#lib-md-id').value=f.name.replace(/\.[^.]+$/,'')}catch(e){fail(e)}};
 $('#lib-md-save').onclick=()=>busy($('#lib-md-save'),'Menyimpan skill…',async()=>{const refs=[];for(const f of $('#lib-md-refs').files)refs.push({name:f.name,content:await readFile(f)});
   const r=await post('/api/library/markdown',{id:$('#lib-md-id').value.trim(),description:$('#lib-md-desc').value.trim(),content:$('#lib-md-content').value,references:refs});
@@ -826,7 +826,7 @@ function renderImport(){const host=$('#import-results'),p=importPreview;show(hos
       if(s.exists)top.append(pill(s.exists==='catalog'?'ID DIPAKAI KATALOG':'SUDAH ADA DI KOLEKSI','warn'));row.append(top);
       const grid=el('div','import-fields');const id=el('label',null,'ID skill'),idIn=document.createElement('input');idIn.className='import-id';idIn.value=s.id;id.append(idIn);
       const desc=el('label',null,'Deskripsi (kapan agent memakainya)'),dIn=document.createElement('input');dIn.className='import-desc';dIn.value=s.description;desc.append(dIn);grid.append(id,desc);row.append(grid);
-      row.append(el('small','muted',`${s.files.length} file pendukung${s.skipped.length?` · ${s.skipped.length} dilewati`:''}`));
+      row.append(el('small','muted',`${s.files.length} file pendukung${s.skipped.length?` · ${s.skipped.length} dilewati`:''}`));if(s.note)row.append(el('p','note lib-note',s.note));
       if(s.skipped.length){const d=el('details');d.append(el('summary',null,'File yang dilewati'),el('pre',null,s.skipped.join('\n')));row.append(d)}
       const md=el('details');md.append(el('summary',null,'Lihat SKILL.md'),el('pre',null,s.skillMd));row.append(md);parts.push(row)}}
   if(p.mcp.length){parts.push(el('h3',null,`MCP (${p.mcp.length})`));
@@ -1132,7 +1132,8 @@ let repoPreview=null,savedRepos=[],repoGeneration=0,repoBusy=false;
 const repoModal=$('#repo-modal');
 function resetGithub(){repoGeneration++;repoPreview=null;$('#repo-modal-save').disabled=repoBusy;show($('#repo-modal-preview'),false);$('#repo-modal-feedback').textContent='Tempel URL, lalu Simpan. Deteksi dilakukan otomatis.'}
 function renderRepos(){const host=$('#saved-repos');$('#repo-count').textContent=savedRepos.length||'';if(!savedRepos.length){host.replaceChildren(emptyState('Belum ada repo tersimpan.','+ Tambah repositori',()=>$('#add-repo').click()));return}
- host.replaceChildren(...savedRepos.map(row=>{const {card,actions}=repoTile(row.repo,row.url,`Skills ${row.skills.length} · MCP ${row.mcp.length}`);card.querySelector('.repo-meta').title='Terdeteksi saat disimpan. Bukan bukti terpasang.';
+ host.replaceChildren(...savedRepos.map(row=>{const imported=row.via==='import',when=imported&&row.at?new Date(row.at).toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'}):'';
+ const {card,actions}=repoTile(row.repo,row.url,imported?`Diimpor${when?' '+when:''} · ${[...row.skills,...row.mcp].slice(0,3).join(', ')||'—'}${row.skills.length+row.mcp.length>3?' …':''}`:`Skills ${row.skills.length} · MCP ${row.mcp.length}`);card.querySelector('.repo-meta').title=imported?`Dicatat otomatis saat import. Skill: ${row.skills.join(', ')||'—'}${row.mcp.length?' · MCP: '+row.mcp.join(', '):''}`:'Terdeteksi saat disimpan. Bukan bukti terpasang.';
  const copy=repoCopy(row.url,row.repo,'copy-btn');
  const del=el('button','repo-act repo-delete');del.innerHTML=REPO_IC.del;del.title='Hapus bookmark';del.type='button';del.setAttribute('aria-label','Hapus bookmark '+row.repo);del.onclick=()=>busy(del,'Menghapus bookmark…',async()=>{await post('/api/repos/delete',{url:row.url});savedRepos=savedRepos.filter(x=>x.url!==row.url);renderRepos();done('Bookmark dihapus.')});actions.prepend(copy);actions.append(del);return card}))}
 async function loadRepos(){try{savedRepos=await getJson('/api/repos');renderRepos()}catch(e){fail(e)}}

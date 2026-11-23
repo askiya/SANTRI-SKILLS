@@ -2086,3 +2086,6 @@ html { scrollbar-gutter: stable; }
   /* Firefox */
   * { scrollbar-width: thin; scrollbar-color: rgb(var(--muted) / .35) transparent; }
 }
+
+/* Import preview: hint when a skill needs its scripts */
+.lib-note { margin: 6px 0 0; padding: 8px 10px; border: 1px solid rgb(234 179 8 / .35); border-radius: 10px; background: rgb(234 179 8 / .08); color: rgb(var(--ink)); font-size: 12px; line-height: 1.5; }

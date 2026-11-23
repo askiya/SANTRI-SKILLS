@@ -44,11 +44,12 @@ test('valid generic GitHub repository returns classified empty preview',()=>fixt
  const response=await post('/api/github/preview',{url:'https://github.com/remotion-dev/remotion',scope:'global'});assert.equal(response.status,200);const body=await response.json();
  assert.equal(body.classification,'empty');assert.deepEqual(body.skills,[]);assert.deepEqual(body.mcp,[]);assert.equal(body.note,'Repository valid, tetapi tidak menyediakan SKILL.md atau konfigurasi MCP yang dapat dipasang.');
 },{githubFetch:async url=>String(url).includes('/git/trees/')?new Response(JSON.stringify({tree:[{path:'package.json',type:'blob'}]}),{headers:{'content-type':'application/json'}}):new Response(JSON.stringify({default_branch:'main'}),{headers:{'content-type':'application/json'}})}));
-test('GitHub failed validation retains preview for retry, then consumes token',()=>fixture(async({post})=>{
+test('GitHub failed validation retains preview for retry, then consumes token',()=>fixture(async({home,post})=>{
  const p=await(await post('/api/github/preview',{url:'https://github.com/fixture/repo',scope:'global'})).json();
  const body={scope:'global',previewId:p.previewId,previewHash:p.previewHash,sourceUrl:p.sourceUrl,skillIds:['repo'],mcpNames:[],confirm:true,confirmGlobal:true};
  assert.equal((await post('/api/github/install',{...body,previewHash:'wrong'})).status,409);
- assert.equal((await post('/api/github/install',body)).status,200);
+ const ok=await post('/api/github/install',body);assert.equal(ok.status,200);assert.equal((await ok.json()).repoSaved,true,'imported repo is remembered');
+ assert.equal(JSON.parse(fs.readFileSync(path.join(home,'.santrihub','repos.json'),'utf8'))[0].url,'https://github.com/fixture/repo');
  assert.equal((await post('/api/github/install',body)).status,409);
 },{githubFetch:async url=>String(url).includes('/git/trees/')?new Response(JSON.stringify({tree:[{path:'SKILL.md',type:'blob'}]}),{headers:{'content-type':'application/json'}}):String(url).startsWith('https://raw.githubusercontent.com/')?new Response('safe'):new Response(JSON.stringify({default_branch:'main'}),{headers:{'content-type':'application/json'}})}));
 test('failed website write retains preview for correction and single successful retry',()=>fixture(async({home,post})=>{

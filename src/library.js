@@ -1,26 +1,34 @@
 'use strict';
 // The member's own skill library: ~/.santrihub/library/skills/<id>/ (SKILL.md + text files),
 // with sources recorded in ~/.santrihub/library/index.json. Skills come from:
-//   - any public GitHub repo: every folder with a SKILL.md, or, when the repo has none,
-//     one skill generated from AGENTS.md / CLAUDE.md / README.md / ... (SKILL.md written here)
+//   - any public GitHub repo: every folder with a SKILL.md (also in agent folders such as
+//     .claude/skills or .codex/skills; mirrored copies are imported once), or, when the repo
+//     has none, one skill generated from AGENTS.md / CLAUDE.md / Cursor, Copilot, Windsurf,
+//     Cline or Kiro rules / README.md (SKILL.md written here)
 //   - Markdown written or uploaded in the dashboard
 // From the library a skill is turned on per AI agent (src/harnesses.js), like catalog skills.
 //
-// Safety: only text files are imported (scripts only when the member opts in), paths are
-// re-validated, nothing from a repo is executed, and writes are atomic (stage + rename).
+// Safety: text files, images and fonts are imported (scripts only when the member opts in),
+// paths are re-validated, nothing from a repo is executed, and writes are atomic (stage + rename).
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { parseIngestUrl, openArchive, relevantSkill, MAX_FILE } = require('./github-import');
+const { parseIngestUrl, boundedFetch, archiveEntries, MAX_FILE } = require('./github-import');
+const mb = (n) => `${Math.round(n / 1024 / 1024)} MB`;
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TEXT_EXT = /\.(md|markdown|mdx|txt|json|ya?ml|csv|toml|xml|html?|css|svg)$/i;
 const SCRIPT_EXT = /\.(js|mjs|cjs|ts|py|sh|bash|ps1|rb)$/i;
+// Assets a skill may ship (stand-in photos, icons, fonts): data, never executed.
+const MEDIA_EXT = /\.(png|jpe?g|webp|gif|avif|ico|bmp|woff2?|ttf|otf)$/i;
+const MAX_ASSET = 4 * 1024 * 1024; // per file from a GitHub skill folder
 // Instruction files a repo without SKILL.md may carry, best first.
 const CANDIDATES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.cursorrules', '.windsurfrules', 'README.md'];
 const MAX_SKILLS = 20;
-const MAX_SKILL_BYTES = 4 * 1024 * 1024;
+const MAX_SKILL_BYTES = 64 * 1024 * 1024;
+// Limits for reading a GitHub archive: skills often carry data (CSV, JSON) and many references.
+const ARCHIVE_LIMITS = { maxArtifacts: 6000, maxTotal: 160 * 1024 * 1024, maxFile: MAX_ASSET, maxEntries: 30000, maxArchive: 160 * 1024 * 1024, maxUncompressed: 480 * 1024 * 1024 };
 
 const libraryRoot = (home = os.homedir()) => path.join(home, '.santrihub', 'library');
 const sha = (x) => crypto.createHash('sha256').update(x).digest('hex');
@@ -91,15 +99,29 @@ function validRel(rel) {
 
 // ── GitHub ──────────────────────────────────────────────────────────────────
 
-const hiddenOrVendored = (rel) => /(^|\/)(node_modules|\.git)(\/|$)/.test(rel) || /(^|\/)\.(?!agents\/)[^/]+\//.test(rel);
+// Hidden folders are skipped, except agent skill folders (.agents/…, .claude/skills, .codex/skills …).
+const hiddenOrVendored = (rel) => /(^|\/)(node_modules|\.git)(\/|$)/.test(rel)
+  || rel.split('/').slice(0, -1).some((seg, i, dirs) => seg.startsWith('.') && seg !== '.agents' && !/^skills?$/.test(dirs[i + 1] || ''));
+const isSkillMd = (rel) => (rel === 'SKILL.md' || rel.endsWith('/SKILL.md')) && !hiddenOrVendored(rel) && !/(^|\/)(?:tests?|__tests__|fixtures)\//.test(rel);
+// Instruction files of other agents, used when a repo has no SKILL.md.
+const AGENT_DOC = /^(?:\.github\/copilot-instructions\.md|\.github\/instructions\/[^/]+\.md|\.cursor\/rules\/[^/]+\.mdc?|\.windsurf\/rules\/[^/]+\.md|\.clinerules(?:\/[^/]+\.md)?|\.kiro\/steering\/[^/]+\.md|\.claude\/(?:commands|agents)\/[^/]+\.md)$/;
+const isDoc = (rel) => /\.(md|markdown|mdx|mdc)$/i.test(rel) || rel === '.clinerules';
 
-async function downloadArchive(src, want, fetcher) {
-  const signal = AbortSignal.timeout(60000);
+// The repository tarball is downloaded once per scan (kept in `held`) and read in two passes.
+async function downloadArchive(src, want, fetcher, held = {}, limits = ARCHIVE_LIMITS) {
+  const read = async () => {
+    const archive = await archiveEntries(held.data, { subdir: src.subdir, want, limits });
+    return { branch: held.branch, files: archive.files, oversized: archive.oversized || [] };
+  };
+  if (held.data) return read();
+  const deadline = AbortSignal.timeout(180000);
   const branches = src.branch ? [src.branch] : ['main', 'master'];
   for (const branch of branches) {
     try {
-      const archive = await openArchive(`https://codeload.github.com/${src.repo}/tar.gz/refs/heads/${encodeURIComponent(branch)}`, { fetcher, signal, subdir: src.subdir, want });
-      return { branch, files: archive.files, oversized: archive.oversized || [] };
+      held.data = await boundedFetch(`https://codeload.github.com/${src.repo}/tar.gz/refs/heads/${encodeURIComponent(branch)}`,
+        { fetcher, deadline, cap: limits.maxArchive, tooLarge: true });
+      held.branch = branch;
+      return await read();
     } catch (e) {
       if (e.status === 404 && branch !== branches.at(-1)) continue;
       if (e.status === 404) throw new Error(src.branch ? `Branch ${src.branch} tidak ditemukan.` : 'Branch main/master tidak ditemukan; pakai URL https://github.com/owner/repo/tree/<branch>.');
@@ -110,12 +132,28 @@ async function downloadArchive(src, want, fetcher) {
 }
 
 const skillRoots = (rels) => {
-  const dirs = rels.filter((rel) => relevantSkill(rel) && !hiddenOrVendored(rel)).map((rel) => path.posix.dirname(rel)).sort();
+  const dirs = rels.filter(isSkillMd).map((rel) => path.posix.dirname(rel)).sort();
   // A SKILL.md inside another skill's folder belongs to that skill (its examples), not a new skill.
   // (A root SKILL.md next to skills/<x>/SKILL.md: both are skills.)
-  return dirs.filter((d) => !dirs.some((o) => o !== d && o !== '.' && d.startsWith(o + '/')));
+  const top = dirs.filter((d) => !dirs.some((o) => o !== d && o !== '.' && d.startsWith(o + '/')));
+  // Repos often ship one skill several times (.claude/skills/x, cli/assets/skills/x): keep the most original copy.
+  const best = new Map();
+  for (const d of top) {
+    const key = d === '.' ? '.' : path.posix.basename(d).toLowerCase();
+    const cur = best.get(key);
+    if (!cur || rootRank(d) < rootRank(cur) || (rootRank(d) === rootRank(cur) && d.split('/').length < cur.split('/').length)) best.set(key, d);
+  }
+  return [...best.values()].sort();
 };
-const isRootDoc = (rel) => !rel.includes('/') && (CANDIDATES.includes(rel) || /\.(md|markdown|mdx)$/i.test(rel));
+// How original a skill folder looks: skills/<x> or the root first, then .agents/.claude skill
+// folders, then the rest; copies bundled in assets/templates/dist/cli/plugins … last.
+function rootRank(dir) {
+  if (dir === '.' || /^skills\/[^/]+$/.test(dir)) return 0;
+  if (dir.split('/').some((x) => /^(assets|templates?|dist|build|out|vendor|examples?|cli|packages|configs?|plugins?)$/i.test(x))) return 3;
+  if (/^\.(agents|claude)\/skills\//.test(dir)) return 1;
+  return 2;
+}
+const isRootDoc = (rel) => (!rel.includes('/') && (CANDIDATES.includes(rel) || /\.(md|markdown|mdx)$/i.test(rel))) || AGENT_DOC.test(rel);
 const NOTHING = 'tidak punya SKILL.md maupun file Markdown untuk dijadikan skill.';
 
 /**
@@ -135,41 +173,52 @@ function scanFiles(files, { name, label, origin = label, includeScripts = false,
     const under = (rel) => roots.filter((d) => d === '.' || rel.startsWith(d + '/')).sort((a, b) => b.length - a.length)[0];
     for (const dir of roots) {
       const inside = (rel) => (dir === '.' ? rel : rel.slice(dir.length + 1));
-      const own = [], skipped = oversized.filter((rel) => under(rel) === dir).map((rel) => `${inside(rel)} (> 512 KB)`);
+      const own = [], skipped = oversized.filter((rel) => under(rel) === dir).map((rel) => `${inside(rel)} (> ${mb(MAX_ASSET)})`);
       for (const [rel, data] of files) {
         if (under(rel) !== dir || hiddenOrVendored(rel)) continue;
         const inner = inside(rel);
-        if (!TEXT_EXT.test(inner) && !SCRIPT_EXT.test(inner)) { skipped.push(`${inner} (bukan file teks)`); continue; }
+        if (!TEXT_EXT.test(inner) && !SCRIPT_EXT.test(inner) && !MEDIA_EXT.test(inner)) { skipped.push(`${inner} (tipe file tidak didukung)`); continue; }
         if (!validRel(inner)) { skipped.push(inner); continue; }
         if (SCRIPT_EXT.test(inner) && !includeScripts) { skipped.push(inner); continue; }
         own.push({ rel: inner, data });
+      }
+      // Stay within the per-skill budget: leave out the largest files instead of failing the import.
+      let size = own.reduce((n, x) => n + x.data.length, 0);
+      for (const x of [...own].sort((a, b) => b.data.length - a.data.length)) {
+        if (size <= MAX_SKILL_BYTES - MAX_FILE || x.rel === 'SKILL.md') continue;
+        own.splice(own.indexOf(x), 1); size -= x.data.length; skipped.push(`${x.rel} (batas ${mb(MAX_SKILL_BYTES)} per skill)`);
       }
       const original = files.get(dir === '.' ? 'SKILL.md' : `${dir}/SKILL.md`).toString('utf8');
       const meta = readFrontmatter(original);
       const id = slug(meta.name || (dir === '.' ? name : path.posix.basename(dir)));
       const description = String(meta.description || summarize(original) || `Skill dari ${label}`).slice(0, 1024);
       const repaired = !meta.name || !meta.description || meta.name !== id;
-      skills.push({ key: dir, id, description, generated: false, repaired, skillMd: withFrontmatter(original, { name: id, description }),
+      const scriptsLeft = skipped.filter((x) => SCRIPT_EXT.test(x)).length;
+      const note = scriptsLeft && /(scripts?\/|\.py\b|python3?\s|node\s+\S+\.m?js)/i.test(original)
+        ? `SKILL.md ini menjalankan script (${scriptsLeft} dilewati). Centang "Sertakan script" bila Anda mempercayai repository ini, agar skill bekerja penuh.` : '';
+      skills.push({ key: dir, id, description, generated: false, repaired, note, skillMd: withFrontmatter(original, { name: id, description }),
         files: own.filter((f) => f.rel !== 'SKILL.md'), skipped });
     }
   } else {
     // No SKILL.md anywhere: build one from the source's own instructions.
-    const docs = rels.filter((rel) => !hiddenOrVendored(rel) && /\.(md|markdown|mdx)$/i.test(rel));
+    const docs = rels.filter((rel) => (!hiddenOrVendored(rel) || AGENT_DOC.test(rel)) && isDoc(rel));
     const pick = CANDIDATES.map((c) => rels.find((rel) => rel === c)).find(Boolean)
-      || rels.find((rel) => isRootDoc(rel) && /\.(md|markdown|mdx)$/i.test(rel)) || (docs.length === 1 ? docs[0] : null);
+      || ['.github/copilot-instructions.md', '.clinerules'].find((c) => rels.includes(c))
+      || rels.find((rel) => !rel.includes('/') && /\.(md|markdown|mdx)$/i.test(rel)) || (docs.length === 1 ? docs[0] : null);
     if (!pick) throw new Error(`${label} ${NOTHING}`);
     const text = files.get(pick).toString('utf8');
     const id = slug(name);
     const description = (summarize(text) || `Panduan dari ${label}`).slice(0, 1024);
     const seen = new Set();
-    const refs = docs.filter((rel) => rel !== pick && !seen.has(path.posix.basename(rel)) && seen.add(path.posix.basename(rel))).slice(0, 10)
-      .map((rel) => ({ rel: `references/${path.posix.basename(rel)}`, data: files.get(rel) }));
+    const refName = (rel) => (rel === '.clinerules' ? 'clinerules.md' : path.posix.basename(rel).replace(/\.mdc$/i, '.md').replace(/^\.+/, ''));
+    const refs = docs.filter((rel) => rel !== pick && !seen.has(refName(rel)) && seen.add(refName(rel))).slice(0, 20)
+      .map((rel) => ({ rel: `references/${refName(rel)}`, data: files.get(rel) }));
     const body = `> Dibuat otomatis oleh SantriHub dari \`${pick}\` di ${origin}.\n\n${stripFrontmatter(text)}`;
     skills.push({ key: '@generated', id, description, generated: true, repaired: false, skillMd: withFrontmatter(body, { name: id, description }), files: refs, skipped: [] });
   }
   for (const s of skills) {
     s.sourceHash = sha(JSON.stringify([s.skillMd, ...s.files.map((f) => [f.rel, sha(f.data)])]));
-    if (s.files.reduce((n, f) => n + f.data.length, Buffer.byteLength(s.skillMd)) > MAX_SKILL_BYTES) throw new Error(`Skill ${s.id} melebihi 4 MB.`);
+    if (s.files.reduce((n, f) => n + f.data.length, Buffer.byteLength(s.skillMd)) > MAX_SKILL_BYTES) throw new Error(`Skill ${s.id} melebihi ${mb(MAX_SKILL_BYTES)}.`);
   }
   return skills;
 }
@@ -185,7 +234,8 @@ async function scanGithub(url, { fetcher = globalThis.fetch, includeScripts = fa
     tooMany: ' Pakai URL /tree/<branch>/<folder> untuk memilih sebagian.' };
   const NONE = `Repository ${NOTHING}`;
   // Pass 1: where are the SKILL.md files, and which root instruction files exist.
-  const first = await downloadArchive(src, (rel) => (relevantSkill(rel) && !hiddenOrVendored(rel)) || isRootDoc(within(rel)), fetcher)
+  const held = {};
+  const first = await downloadArchive(src, (rel) => isSkillMd(rel) || isRootDoc(within(rel)), fetcher, held)
     .catch((e) => { throw /tidak punya artefak relevan/.test(e.message) ? new Error(NONE) : e; });
   const roots = skillRoots([...first.files.keys()]);
   let skills;
@@ -193,7 +243,7 @@ async function scanGithub(url, { fetcher = globalThis.fetch, includeScripts = fa
     if (roots.length > MAX_SKILLS) throw new Error(`Repository berisi ${roots.length} skill (maks ${MAX_SKILLS}).${opts.tooMany}`);
     // Pass 2: the full folders of those skills (text files; scripts are left out unless asked).
     const inSkill = (rel) => roots.some((d) => d === '.' || rel.startsWith(d + '/'));
-    const second = await downloadArchive({ ...src, branch: first.branch }, (rel) => inSkill(rel) && !hiddenOrVendored(rel) && (TEXT_EXT.test(rel) || SCRIPT_EXT.test(rel)), fetcher);
+    const second = await downloadArchive({ ...src, branch: first.branch }, (rel) => inSkill(rel) && !hiddenOrVendored(rel) && (TEXT_EXT.test(rel) || SCRIPT_EXT.test(rel) || MEDIA_EXT.test(rel)), fetcher, held);
     skills = scanFiles(below(second.files, src.subdir), { ...opts, oversized: second.oversized.map(within) });
   } else {
     skills = scanFiles(below(first.files, src.subdir), opts);
@@ -225,7 +275,7 @@ function saveSkill(root, { id, skillMd, files = [], meta }) {
   let total = Buffer.byteLength(skillMd);
   for (const f of files) {
     if (!validRel(f.rel) || f.rel === 'SKILL.md') throw new Error(`Path file tidak aman: ${f.rel}`);
-    if ((total += f.data.length) > MAX_SKILL_BYTES) throw new Error('Skill melebihi 4 MB.');
+    if ((total += f.data.length) > MAX_SKILL_BYTES) throw new Error(`Skill melebihi ${mb(MAX_SKILL_BYTES)}.`);
   }
   const dir = path.join(root, 'skills', id), staged = `${dir}.staged-${crypto.randomBytes(4).toString('hex')}`, old = `${dir}.old-${crypto.randomBytes(4).toString('hex')}`;
   fs.mkdirSync(path.join(root, 'skills'), { recursive: true, mode: 0o700 });
@@ -303,4 +353,4 @@ function markdownSkill({ id, description, content, references = [] }) {
   return { id: finalId, description: finalDescription, skillMd: withFrontmatter(content, { name: finalId, description: finalDescription }), files };
 }
 
-module.exports = { readFrontmatter, libraryRoot, slug, summarize, withFrontmatter, scanGithub, scanFiles, validRel, TEXT_EXT, SCRIPT_EXT, saveSkill, listLibrary, removeSkill, setLibraryPaket, markdownSkill, readIndex, ID_RE };
+module.exports = { readFrontmatter, libraryRoot, slug, summarize, withFrontmatter, scanGithub, scanFiles, validRel, TEXT_EXT, SCRIPT_EXT, MEDIA_EXT, saveSkill, listLibrary, removeSkill, setLibraryPaket, markdownSkill, readIndex, ID_RE };

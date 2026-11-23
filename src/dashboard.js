@@ -112,12 +112,25 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
     if(fs.statSync(reposFile).size>2*1024*1024)throw new Error('File bookmark terlalu besar.');
     const rows=JSON.parse(fs.readFileSync(reposFile,'utf8'));
     if(!Array.isArray(rows)||rows.length>50)throw new Error('File bookmark invalid.');
-    return rows.map(row=>{const url=canonicalRepo(row.url);for(const names of [row.skills,row.mcp])if(!Array.isArray(names)||names.length>100||names.some(n=>typeof n!=='string'||n.length>160))throw new Error('Deteksi bookmark invalid.');return {url,repo:url.slice(19),skills:row.skills,mcp:row.mcp}});
+    return rows.map(row=>{const url=canonicalRepo(row.url);for(const names of [row.skills,row.mcp])if(!Array.isArray(names)||names.length>100||names.some(n=>typeof n!=='string'||n.length>160))throw new Error('Deteksi bookmark invalid.');const out={url,repo:url.slice(19),skills:row.skills,mcp:row.mcp};if(row.via==='import')out.via='import';if(typeof row.at==='string'&&row.at.length<=40)out.at=row.at;return out});
   }
   function writeRepos(rows){
     assertNoLinks(reposFile);fs.mkdirSync(path.dirname(reposFile),{recursive:true,mode:0o700});
     const tmp=reposFile+'.'+crypto.randomBytes(8).toString('hex')+'.tmp';
     try{fs.writeFileSync(tmp,JSON.stringify(rows),{flag:'wx',mode:0o600});fs.renameSync(tmp,reposFile)}finally{fs.rmSync(tmp,{force:true})}
+  }
+  // Every GitHub import is remembered in Repositori → Tersimpan: a known repo gets the new names
+  // merged in; a new one is added (when the 50 slots are full, the oldest imported row makes room;
+  // bookmarks saved by hand are never pushed out). Never fails the import itself.
+  function rememberRepo(repo,{skills=[],mcp=[]}={}){
+    try{
+      const url=canonicalRepo(`https://github.com/${repo}`),rows=readRepos(),i=rows.findIndex(r=>r.url===url);
+      const merge=(a,b)=>[...new Set([...(a||[]),...b.filter(n=>typeof n==='string').map(n=>n.slice(0,160))])].slice(0,100);
+      const at=new Date().toISOString();
+      if(i>=0){const old=rows[i];rows[i]={...old,skills:merge(old.skills,skills),mcp:merge(old.mcp,mcp),at:old.via==='import'?at:old.at};if(!rows[i].at)delete rows[i].at;writeRepos(rows);return true}
+      if(rows.length>=50){const drop=rows.findIndex(r=>r.via==='import');if(drop<0)return false;rows.splice(drop,1)}
+      writeRepos([...rows,{url,repo:url.slice(19),skills:merge([],skills),mcp:merge([],mcp),via:'import',at}]);return true;
+    }catch{return false}
   }
   let verification=null;
   // Skill proof: a managed skill "santrihub-cek" holds a code that exists nowhere else. An agent that
@@ -546,6 +559,7 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
             : null;
         }
         githubPreviews.delete(input.previewId);
+        result.repoSaved = rememberRepo(held.snap.repo, { skills: result.skills ? result.skills.ids : [], mcp: mcpNames });
         return send(200, result);
         } finally { held.installing = false; }
       }
@@ -617,7 +631,7 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
             const previewId = crypto.randomBytes(24).toString('hex');
             libraryPreviews.set(previewId, { scan, includeScripts: input.includeScripts === true, expires: Date.now() + 600_000 });
             for (const [k, v] of libraryPreviews) if (v.expires <= Date.now()) libraryPreviews.delete(k);
-            return send(200, { previewId, source: scan.source, skills: scan.skills.map((s) => ({ key: s.key, id: s.id, description: s.description, generated: s.generated, repaired: s.repaired,
+            return send(200, { previewId, source: scan.source, skills: scan.skills.map((s) => ({ key: s.key, id: s.id, description: s.description, generated: s.generated, repaired: s.repaired, note: s.note || '',
               files: s.files.map((f) => f.rel), skipped: s.skipped, skillMd: s.skillMd.slice(0, 6000) })) });
           }
           if (req.url === '/api/library/github/save') {
@@ -636,7 +650,8 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
               saved.push(id);
             }
             libraryPreviews.delete(input.previewId);
-            return send(200, { saved });
+            const repoSaved = rememberRepo(held.scan.source.repo, { skills: saved });
+            return send(200, { saved, repoSaved });
           }
           if (req.url === '/api/library/markdown') {
             const skill = library.markdownSkill({ id: input.id, description: input.description, content: input.content, references: input.references || [] });
@@ -655,7 +670,7 @@ function createDashboardServer({ cwd = process.cwd(), home, env = process.env, a
             for (const [k, v] of libraryPreviews) if (v.expires <= Date.now()) libraryPreviews.delete(k);
             const taken = await catalogIds(), reserved = await reservedMcp(), mine = mcpLibrary.readMcpLibrary(mcpLibPath);
             return send(200, { previewId, problems: scan.problems,
-              skills: scan.skills.map((s) => ({ key: s.key, source: s.source, id: s.id, description: s.description, generated: s.generated, repaired: s.repaired,
+              skills: scan.skills.map((s) => ({ key: s.key, source: s.source, id: s.id, description: s.description, generated: s.generated, repaired: s.repaired, note: s.note || '',
                 files: s.files.map((f) => f.rel), skipped: s.skipped, skillMd: s.skillMd.slice(0, 6000), exists: taken.has(s.id) ? 'catalog' : index.skills[s.id] ? 'library' : null })),
               mcp: scan.mcp.map((m) => ({ key: m.key, name: m.name, from: m.from, ...mcpLibrary.publicEntry(m.entry), exists: reserved.has(m.name) ? 'catalog' : mine[m.name] ? 'mine' : null })) });
           }

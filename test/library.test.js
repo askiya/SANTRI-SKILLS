@@ -48,12 +48,14 @@ test('frontmatter helpers: block values, rewrite keeps other keys, ids follow th
 });
 
 test('GitHub: every SKILL.md folder becomes a skill with its text files; scripts only on request', async () => {
-  const big = Buffer.alloc(600 * 1024, 'a');
+  const big = Buffer.alloc(5 * 1024 * 1024, 'a');
   const f = githubFixture({
     'README.md': '# Repo',
     'skills/taste/SKILL.md': '---\nname: design-taste\ndescription: >-\n  Gives agents taste\n  for frontends.\n---\n# Taste',
     'skills/taste/references/colour.md': 'colours',
     'skills/taste/library/data.json': '{}',
+    'skills/taste/assets/photo.webp': Buffer.from('RIFF....WEBP'),
+    'skills/taste/assets/clip.mp4': 'video',
     'skills/taste/library/huge.json': big,
     'skills/taste/scripts/draw.mjs': 'console.log(1)',
     'skills/plain/SKILL.md': '# Plain skill\n\nChecks deploys before release, step by step.',
@@ -66,14 +68,53 @@ test('GitHub: every SKILL.md folder becomes a skill with its text files; scripts
   const taste = scan.skills[1];
   assert.equal(taste.description, 'Gives agents taste for frontends.');
   assert.equal(taste.repaired, false);
-  assert.deepEqual(taste.files.map((x) => x.rel).sort(), ['library/data.json', 'references/colour.md']);
-  assert.deepEqual(taste.skipped.sort(), ['library/huge.json (> 512 KB)', 'scripts/draw.mjs']);
+  assert.deepEqual(taste.files.map((x) => x.rel).sort(), ['assets/photo.webp', 'library/data.json', 'references/colour.md'], 'images ride along; other binaries do not');
+  assert.deepEqual(taste.skipped.sort(), ['library/huge.json (> 4 MB)', 'scripts/draw.mjs']);
   const plain = scan.skills[0];
   assert.equal(plain.repaired, true, 'SKILL.md without frontmatter is repaired');
   assert.match(plain.skillMd, /^---\nname: plain\ndescription: "Checks deploys before release, step by step\."\n---\n\n# Plain skill/);
 
   const withScripts = await L.scanGithub('https://github.com/fixture/repo', { fetcher: f.fetcher, includeScripts: true });
   assert.ok(withScripts.skills[1].files.some((x) => x.rel === 'scripts/draw.mjs'));
+});
+
+test('GitHub: skills in agent folders, mirrors imported once, data-heavy skills, script hint', async () => {
+  const files = {
+    'README.md': '# UI UX Pro Max',
+    '.claude/skills/ui-max/SKILL.md': '---\nname: ui-max\ndescription: Design intelligence for interfaces.\n---\nRun `python3 scripts/search.py "<query>"`.',
+    '.claude/skills/ui-max/scripts/search.py': 'print(1)',
+    '.claude/skills/brand/SKILL.md': '---\nname: brand\ndescription: Brand voice and identity.\n---\n# Brand',
+    'cli/assets/skills/ui-max/SKILL.md': '---\nname: ui-max\ndescription: bundled copy\n---\n',
+    'cli/assets/skills/brand/SKILL.md': '---\nname: brand\ndescription: bundled copy\n---\n',
+    'stack/.claude/commands/audit.md': 'not a skill',
+  };
+  for (let i = 0; i < 150; i++) files[`.claude/skills/ui-max/data/set-${i}.csv`] = `a,b\n${i},x`;
+  const f = githubFixture(files);
+  const scan = await L.scanGithub('https://github.com/fixture/repo', { fetcher: f.fetcher });
+  assert.equal(f.calls.length, 1, 'the tarball is downloaded once per scan');
+  assert.deepEqual(scan.skills.map((s) => [s.key, s.id]), [['.claude/skills/brand', 'brand'], ['.claude/skills/ui-max', 'ui-max']]);
+  const ui = scan.skills[1];
+  assert.equal(ui.description, 'Design intelligence for interfaces.');
+  assert.equal(ui.files.filter((x) => x.rel.startsWith('data/')).length, 150, 'more than 100 data files are fine');
+  assert.match(ui.note, /Sertakan script/);
+  assert.equal(scan.skills[0].note, '');
+  const withScripts = await L.scanGithub('https://github.com/fixture/repo', { fetcher: f.fetcher, includeScripts: true });
+  assert.equal(withScripts.skills[1].note, '');
+  assert.ok(withScripts.skills[1].files.some((x) => x.rel === 'scripts/search.py'));
+});
+
+test('GitHub: a repo with only Cursor/Copilot rules becomes one skill with those rules as references', async () => {
+  const f = githubFixture({
+    '.github/copilot-instructions.md': '# Copilot\n\nUse strict TypeScript and small pure functions everywhere.',
+    '.cursor/rules/react.mdc': '---\ndescription: React rules\n---\nPrefer server components.',
+    '.cursor/rules/style.mdc': 'Tailwind only.',
+    'src/index.ts': 'export {}',
+  });
+  const [s] = (await L.scanGithub('https://github.com/fixture/repo', { fetcher: f.fetcher })).skills;
+  assert.equal(s.generated, true);
+  assert.equal(s.description, 'Use strict TypeScript and small pure functions everywhere.');
+  assert.match(s.skillMd, /dari `\.github\/copilot-instructions\.md`/);
+  assert.deepEqual(s.files.map((x) => x.rel).sort(), ['references/react.md', 'references/style.md']);
 });
 
 test('GitHub: a repo without SKILL.md gets one generated from its instructions', async () => {
@@ -158,7 +199,17 @@ test('dashboard: library API saves GitHub and Markdown skills, activates them pe
     assert.deepEqual(preview.body.skills.map((s) => [s.key, s.id, s.files]), [['skills/taste', 'taste', ['references/a.md']]]);
     assert.equal((await post('/api/library/github/save', { previewId: preview.body.previewId, picks: [{ key: 'skills/taste', id: 'cat-appscript' }], _csrf: csrf })).status, 409, 'catalog ids are reserved');
     const saved = await post('/api/library/github/save', { previewId: preview.body.previewId, picks: [{ key: 'skills/taste', id: 'my-taste', description: 'Pakai saat mendesain halaman.' }], _csrf: csrf });
-    assert.deepEqual(saved.body, { saved: ['my-taste'] });
+    assert.deepEqual(saved.body, { saved: ['my-taste'], repoSaved: true });
+    // The imported repo is remembered in Repositori → Tersimpan; a second import merges, never duplicates.
+    const repos = async () => (await fetch(base + '/api/repos')).json();
+    let rows = await repos();
+    assert.deepEqual(rows.map((r) => [r.url, r.skills, r.via]), [['https://github.com/fixture/repo', ['my-taste'], 'import']]);
+    assert.ok(Date.parse(rows[0].at));
+    const again = await post('/api/library/github/preview', { url: 'https://github.com/Fixture/Repo', _csrf: csrf });
+    await post('/api/library/github/save', { previewId: again.body.previewId, picks: [{ key: 'skills/taste', id: 'my-taste-2', description: 'Pakai saat mendesain.' }], _csrf: csrf });
+    rows = await repos();
+    assert.deepEqual(rows.map((r) => [r.url, r.skills]), [['https://github.com/fixture/repo', ['my-taste', 'my-taste-2']]]);
+    await post('/api/library/delete', { id: 'my-taste-2', _csrf: csrf });
     assert.match(fs.readFileSync(path.join(home, '.santrihub', 'library', 'skills', 'my-taste', 'SKILL.md'), 'utf8'), /^---\nname: my-taste\ndescription: "Pakai saat mendesain halaman\."\n---\n\nv1/);
 
     assert.deepEqual((await post('/api/library/markdown', { content: '# Gaya Saya\n\nPakai bahasa santai saat menulis artikel.', _csrf: csrf })).body, { saved: ['gaya-saya'], synced: [] });
